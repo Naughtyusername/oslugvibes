@@ -395,3 +395,71 @@ combat_log_draw :: proc(ctx: ^Slug_Context, log: ^Combat_Log, panel_x, panel_y, 
 		slug_draw_text(ctx, text, panel_x, y, LOG_FONT_SIZE, color)
 	}
 }
+
+// --- Drop shadow text ---
+// Renders text twice: once offset in a dark color, then the real text on top.
+
+draw_text_shadow :: proc(
+	ctx: ^Slug_Context,
+	text: string,
+	x, y: f32,
+	font_size: f32,
+	color: [4]f32,
+	shadow_offset: f32 = 2.0,
+	shadow_color: [4]f32 = {0.0, 0.0, 0.0, 0.6},
+) {
+	slug_draw_text(ctx, text, x + shadow_offset, y + shadow_offset, font_size, shadow_color)
+	slug_draw_text(ctx, text, x, y, font_size, color)
+}
+
+// --- Typewriter reveal ---
+// Shows characters one at a time based on elapsed time.
+
+draw_text_typewriter :: proc(
+	ctx: ^Slug_Context,
+	text: string,
+	x, y: f32,
+	font_size: f32,
+	color: [4]f32,
+	time: f32,
+	chars_per_sec: f32 = 12.0,
+) {
+	visible_chars := int(time * chars_per_sec)
+	if visible_chars <= 0 do return
+
+	// Count runes up to visible_chars and get the byte offset
+	char_count := 0
+	byte_end := 0
+	for i := 0; i < len(text); {
+		if char_count >= visible_chars do break
+		_, size := utf8_decode(text[i:])
+		i += size
+		byte_end = i
+		char_count += 1
+	}
+
+	slug_draw_text(ctx, text[:byte_end], x, y, font_size, color)
+}
+
+// Minimal single-rune UTF-8 decode (returns rune and byte width)
+@(private = "file")
+utf8_decode :: proc(s: string) -> (r: rune, size: int) {
+	if len(s) == 0 do return 0, 0
+	b := s[0]
+	if b < 0x80 do return rune(b), 1
+	if b < 0xC0 do return 0xFFFD, 1
+	if b < 0xE0 {
+		if len(s) < 2 do return 0xFFFD, 1
+		return rune(b & 0x1F) << 6 | rune(s[1] & 0x3F), 2
+	}
+	if b < 0xF0 {
+		if len(s) < 3 do return 0xFFFD, 1
+		return rune(b & 0x0F) << 12 | rune(s[1] & 0x3F) << 6 | rune(s[2] & 0x3F), 3
+	}
+	if len(s) < 4 do return 0xFFFD, 1
+	return rune(b & 0x07) << 18 |
+		rune(s[1] & 0x3F) << 12 |
+		rune(s[2] & 0x3F) << 6 |
+		rune(s[3] & 0x3F),
+		4
+}

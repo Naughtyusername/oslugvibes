@@ -355,6 +355,25 @@ main :: proc() {
 		draw_text_shake(ctx, "CRITICAL HIT!", 30, y_pos, 28, 3.0, total_time * 30.0)
 		y_pos += 40
 
+		// Drop shadow text
+		draw_text_shadow(ctx, "Drop Shadow Effect", 30, y_pos, 28, COLOR_WHITE, 3.0, {0, 0, 0, 0.9})
+		y_pos += 40
+
+		// Typewriter reveal (loops every 5 seconds)
+		typewriter_text :: "Typewriter reveal effect..."
+		typewriter_time := math.mod(total_time, 5.0)
+		draw_text_typewriter(
+			ctx,
+			typewriter_text,
+			30,
+			y_pos,
+			20,
+			COLOR_GREEN,
+			typewriter_time,
+			8.0,
+		)
+		y_pos += 30
+
 		// Size ramp
 		sizes := [?]f32{12, 16, 20, 28, 36, 48}
 		for size in sizes {
@@ -455,6 +474,13 @@ main :: proc() {
 		zoom_buf: [32]u8
 		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
 		slug_draw_text(ctx, zoom_text, 30, 692, 14, COLOR_DIM)
+
+		// FPS counter — pinned top-left
+		fps_buf: [48]u8
+		fps := dt > 0 ? 1.0 / dt : 0
+		fps_text := fmt.bprintf(fps_buf[:], "%.0f FPS | %d quads", fps, ctx.quad_count)
+		slug_draw_text(ctx, fps_text, 1100, 16, 16, COLOR_YELLOW)
+
 		slug_draw_text(
 			ctx,
 			"Scroll: zoom | MMB: pan | R: reset | Space: hit!",
