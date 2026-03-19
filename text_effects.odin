@@ -38,7 +38,7 @@ draw_text_rainbow :: proc(
 	speed: f32,       // hue rotation speed (degrees/sec)
 	spread: f32,      // hue offset per character (degrees)
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 	pen_x := x
 	char_idx := 0
 
@@ -79,7 +79,7 @@ draw_text_wobble :: proc(
 	frequency: f32,   // wave speed
 	phase_step: f32,  // phase offset per character
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 	pen_x := x
 	char_idx := 0
 
@@ -121,7 +121,7 @@ draw_text_shake :: proc(
 	intensity: f32,  // max displacement in pixels
 	time: f32,       // used to vary the shake over time
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 	pen_x := x
 	char_idx := 0
 
@@ -162,7 +162,7 @@ draw_text_rotated :: proc(
 	angle: f32,         // radians
 	color: [4]f32,
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 
 	// Measure total width to center the text
 	total_w, _ := measure_text(font, text, font_size)
@@ -217,7 +217,7 @@ draw_text_on_circle :: proc(
 	font_size: f32,
 	color: [4]f32,
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 
 	// Total angular span: each character's advance width maps to an arc
 	pen_angle := start_angle
@@ -267,7 +267,7 @@ draw_text_on_wave :: proc(
 	phase: f32,        // phase offset (animated with time)
 	color: [4]f32,
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 	pen_x := x
 	freq := math.TAU / wavelength
 

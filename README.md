@@ -24,21 +24,39 @@ This implementation references Lengyel's public HLSL/GLSL shader code and the Sl
 
 ## Features
 
+### Core Rendering
 - **Resolution-independent text** — zoom from 0.1x to 50x with perfectly crisp curves
-- **Interactive zoom/pan** — mouse wheel to zoom, middle-click drag to pan
-- **Damage number particles** — floating combat text that pops and fades (game dev demo)
-- **Multiple text sizes** — renders the same font from 12px to 48px simultaneously
-- **Animated text** — sine wave title animation
 - **Dual-ray antialiasing** — horizontal + vertical coverage for smooth edges without MSAA
+- **Dynamic dilation** — vertex shader auto-expands quads by half a pixel for correct AA at any scale
+
+### Multi-Font Support
+- **Multiple simultaneous fonts** — up to 4 font slots, each with independent GPU textures and descriptor sets
+- **Kerning** — automatic kern pair adjustment via stb_truetype's kern table (visible on proportional fonts like Liberation Sans/Serif)
+- **Cubic curve support** — CFF/PostScript font outlines automatically converted to quadratic approximations via recursive De Casteljau subdivision
+
+### Text Effects (all CPU-side, zero shader changes)
+- **Rainbow cycling** — per-character HSV color cycling
+- **Wobble** — per-character sine wave displacement with configurable amplitude/frequency/phase
+- **Shake** — per-character pseudo-random jitter (critical hit effect)
+- **Rotating text** — arbitrary-angle rendering using full 2x2 Jacobian transform
+- **Circular text** — glyphs positioned and rotated along a circular arc
+- **Wave text** — glyphs following a sine wave path, rotated to match the tangent
+- **Text measurement** — `measure_text()` returns width/height without drawing
+
+### Game UI Demos
+- **Damage numbers** — floating combat text that pops large, shrinks, and fades as it rises
+- **Scrolling combat log** — color-coded RPG-style messages with age-based fade
+- **Interactive zoom/pan** — mouse wheel zoom, middle-click drag pan
 
 ## Architecture
 
 ```
 main.odin               Entry point, event loop, demo scenes, damage numbers
-slug_types.odin          All shared types (vertex format, glyph data, Vulkan context)
-ttf_parser.odin          Font loading via stb_truetype (TrueType outlines → quadratic Béziers)
+slug_types.odin          All shared types (vertex format, glyph data, Vulkan context, font slots)
+ttf_parser.odin          Font loading via stb_truetype, kerning, cubic-to-quadratic conversion
 glyph_processor.odin     Band generation, curve sorting, texture packing, f32→f16
-slug_renderer.odin       Vulkan init, pipeline, descriptor sets, text drawing, frame rendering
+slug_renderer.odin       Vulkan init, pipeline, multi-font draw calls, text drawing
+text_effects.odin        Per-character effects (rainbow, wobble, shake, rotation, paths)
 vulkan_helpers.odin      Buffer/texture creation, image transitions, shader modules
 shaders/slug.vert        Vertex shader — dynamic dilation, data unpacking
 shaders/slug.frag        Fragment shader — core Slug algorithm (ray intersection, winding, coverage)
@@ -46,12 +64,13 @@ shaders/slug.frag        Fragment shader — core Slug algorithm (ray intersecti
 
 ### Data Flow
 
-1. **TTF parsing**: `stb_truetype` extracts glyph contours → quadratic Bézier curves (lines promoted to degenerate quadratics)
-2. **Band generation**: Each glyph's bounding box is divided into horizontal/vertical bands for spatial acceleration
-3. **Texture packing**: Curve control points packed into an `R16G16B16A16_SFLOAT` texture; band headers + curve index lists packed into an `R16G16_UINT` texture
-4. **Vertex emission**: Each visible glyph becomes 4 vertices (80 bytes each, 5×vec4) with position, em-space texcoords, packed glyph metadata, inverse Jacobian, band transform, and color
-5. **Vertex shader**: Expands the glyph quad by half a pixel in viewport space (dynamic dilation) so the antialiasing kernel has room to work
-6. **Fragment shader**: Fetches curve data from textures, evaluates ray-curve intersections band by band, computes coverage
+1. **TTF parsing**: `stb_truetype` extracts glyph contours → quadratic Bézier curves. Lines promoted to degenerate quadratics. Cubics subdivided via De Casteljau until approximation error < 0.001 em units.
+2. **Band generation**: Each glyph's bounding box is divided into horizontal/vertical bands for spatial acceleration. Curves sorted by descending max coordinate for early-exit optimization in the shader.
+3. **Texture packing**: Curve control points packed into an `R16G16B16A16_SFLOAT` texture; band headers + curve index lists packed into an `R16G16_UINT` texture. Each font gets its own texture pair.
+4. **Vertex emission**: Each visible glyph becomes 4 vertices (80 bytes each, 5×vec4) with position, em-space texcoords, packed glyph metadata, inverse Jacobian, band transform, and color. The Jacobian supports arbitrary rotation/scale via a full 2x2 matrix.
+5. **Vertex shader**: Expands the glyph quad by half a pixel in viewport space (dynamic dilation) so the antialiasing kernel has room to work.
+6. **Fragment shader**: Fetches curve data from textures, evaluates ray-curve intersections band by band, computes coverage.
+7. **Multi-font draw**: Renderer issues separate draw calls per font slot, binding each font's descriptor set (textures).
 
 ## Building
 
@@ -61,7 +80,7 @@ shaders/slug.frag        Fragment shader — core Slug algorithm (ray intersecti
 - `glslc` shader compiler (from shaderc or vulkan-tools)
 - SDL3 development libraries
 - stb_truetype (built via `make unix` in Odin's `vendor/stb/`)
-- A TrueType font (defaults to Liberation Mono)
+- TrueType fonts (defaults to Liberation Mono/Sans/Serif)
 
 ### Build and Run
 ```sh
@@ -72,7 +91,7 @@ bash build.sh
 ### Controls
 | Input | Action |
 |-------|--------|
-| Mouse wheel | Zoom in/out |
+| Mouse wheel | Zoom in/out (0.1x – 50x) |
 | Middle mouse drag | Pan |
 | R | Reset zoom/pan |
 | Space | Spawn damage number |
@@ -87,21 +106,18 @@ The HLSL→GLSL shader port was done mechanically from Eric Lengyel's publicly a
 ## Future Ideas
 
 ### For Roguelikes / Games
-- **Damage numbers** (implemented) — floating combat text with pop-and-fade animation, demonstrating dynamic text at varying sizes
-- **Log window** — scrolling message log with mixed colors, sizes, and styles
-- **Tooltips** — crisp text overlays at any UI scale, immune to pixel-grid snapping
 - **Dynamic UI scaling** — since text is resolution-independent, the entire UI can scale smoothly with a slider or pinch gesture
-- **Stylized fonts** — load multiple TTF files for headers, body text, and flavor text
-- **Per-glyph effects** — wobble, color cycling, typewriter reveal — all just vertex data manipulation
+- **Typewriter reveal** — animate characters appearing one by one, trivial with per-character drawing
+- **Outlined/shadowed text** — render the same text twice with offset for drop shadow, or with slightly dilated quads for outline
+- **Text wrapping** — automatic line breaking using `measure_text()`
 
 ### Technical Improvements
-- **Cubic curve support** — handle CFF/PostScript font outlines (currently skipped)
-- **Kerning** — use stb_truetype's kerning tables for proper letter spacing
 - **Swapchain recreation** — handle window resize properly
-- **Font atlas switching** — load multiple fonts simultaneously, switch per-draw-call
 - **Subpixel rendering** — evaluate coverage per RGB subpixel for LCD-quality antialiasing
 - **GPU compute preprocessing** — move band generation and curve sorting to compute shaders
 - **Text shaping** — integrate HarfBuzz for complex scripts (Arabic, Devanagari, etc.)
+- **Glyph caching beyond ASCII** — extend to full Unicode (currently limited to codepoints 0-255)
+- **Instanced rendering** — one draw call for all fonts using bindless textures
 
 ## References
 

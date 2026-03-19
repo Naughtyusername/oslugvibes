@@ -15,7 +15,9 @@ WINDOW_TITLE   :: "SlugVibes — GPU Text Rendering"
 INITIAL_WIDTH  :: 1280
 INITIAL_HEIGHT :: 720
 
-FONT_PATH :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
+FONT_PATH       :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
+FONT_PATH_SANS  :: "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+FONT_PATH_SERIF :: "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
 
 // Text colors
 COLOR_WHITE  :: [4]f32{1.0, 1.0, 1.0, 1.0}
@@ -125,13 +127,16 @@ main :: proc() {
 	defer sdl.DestroyWindow(window)
 
 	// --- Vulkan + Slug init ---
-	ctx: Slug_Context
+	// Heap-allocate: Slug_Context is ~340KB with font arrays, too large for stack
+	ctx_ptr := new(Slug_Context)
+	defer free(ctx_ptr)
+	ctx := ctx_ptr
 	ctx.zoom = 1.0
-	if !slug_init(&ctx, window) {
+	if !slug_init(ctx, window) {
 		fmt.eprintln("Slug/Vulkan init failed")
 		return
 	}
-	defer slug_shutdown(&ctx)
+	defer slug_shutdown(ctx)
 
 	// --- Load font ---
 	font, font_ok := font_load(FONT_PATH)
@@ -153,10 +158,14 @@ main :: proc() {
 	pack := pack_glyph_textures(&ctx.font)
 	defer pack_result_destroy(&pack)
 
-	if !slug_upload_font(&ctx, &pack) {
+	if !slug_upload_font(ctx, &pack) {
 		fmt.eprintln("Failed to upload font textures")
 		return
 	}
+
+	// Load additional fonts
+	slug_load_font_slot(ctx, 1, FONT_PATH_SANS, "Liberation Sans")
+	slug_load_font_slot(ctx, 2, FONT_PATH_SERIF, "Liberation Serif")
 
 	fmt.println("SlugVibes initialized.")
 	fmt.println("  Mouse wheel: zoom in/out")
@@ -233,7 +242,7 @@ main :: proc() {
 				}
 
 			case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-				break
+				ctx.framebuffer_resized = true
 			}
 		}
 
@@ -274,38 +283,48 @@ main :: proc() {
 		// ===================================================
 		// BUILD TEXT GEOMETRY
 		// ===================================================
-		slug_begin(&ctx)
+		slug_begin(ctx)
 
-		// --- Left column: Static text demos ---
+		// --- Left column: Original demos + effects ---
 		y_pos: f32 = 40
 
-		// Title with wobble
-		draw_text_wobble(&ctx, "SlugVibes", 30, y_pos, 42, total_time, 8.0, 4.0, 0.8)
+		// Title with wobble effect
+		draw_text_wobble(ctx, "SlugVibes", 30, y_pos, 42, total_time, 8.0, 4.0, 0.8)
 		y_pos += 60
 
-		// Standard text samples
-		slug_draw_text(&ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
-		y_pos += 36
+		// Original text samples (same as v1)
+		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 32, COLOR_WHITE)
+		y_pos += 50
 
-		// Rainbow cycling text
-		draw_text_rainbow(&ctx, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", 30, y_pos, 20, total_time, 200.0, 15.0)
+		slug_draw_text(ctx, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", 30, y_pos, 24, COLOR_YELLOW)
+		y_pos += 40
+
+		slug_draw_text(ctx, "abcdefghijklmnopqrstuvwxyz !@#$%^&*()", 30, y_pos, 24, COLOR_GREEN)
+		y_pos += 40
+
+		// Per-character effects
+		draw_text_rainbow(ctx, "Rainbow cycling per-character", 30, y_pos, 20, total_time, 200.0, 15.0)
 		y_pos += 30
 
-		// Shaking text
-		draw_text_shake(&ctx, "CRITICAL HIT!", 30, y_pos, 28, 3.0, total_time * 30.0)
+		draw_text_shake(ctx, "CRITICAL HIT!", 30, y_pos, 28, 3.0, total_time * 30.0)
 		y_pos += 40
 
 		// Size ramp
-		sizes := [?]f32{10, 14, 18, 24, 32}
+		sizes := [?]f32{12, 16, 20, 28, 36, 48}
 		for size in sizes {
-			slug_draw_text(&ctx, "Slug", 30, y_pos, size, COLOR_PINK)
-			y_pos += size + 6
+			slug_draw_text(ctx, "Slug", 30, y_pos, size, COLOR_PINK)
+			y_pos += size + 8
 		}
+
+		// Resolution independence callout
+		y_pos += 10
+		slug_draw_text(ctx, "Resolution Independent!", 30, y_pos, 36, COLOR_ORANGE)
+		y_pos += 50
 
 		// --- Rotating text ---
 		// Slowly spinning text in the upper-right area
 		draw_text_rotated(
-			&ctx,
+			ctx,
 			"Resolution Independent!",
 			900, 120,
 			22,
@@ -315,7 +334,7 @@ main :: proc() {
 
 		// Second rotating text, opposite direction
 		draw_text_rotated(
-			&ctx,
+			ctx,
 			"* GPU Bezier Curves *",
 			900, 120,
 			16,
@@ -325,7 +344,7 @@ main :: proc() {
 
 		// --- Text on a circle ---
 		draw_text_on_circle(
-			&ctx,
+			ctx,
 			"  Slug Patent Now Public Domain!  ",
 			640, 420,
 			150,                    // radius
@@ -336,7 +355,7 @@ main :: proc() {
 
 		// Inner circle, opposite direction
 		draw_text_on_circle(
-			&ctx,
+			ctx,
 			"  Odin + Vulkan + SDL3  ",
 			640, 420,
 			100,
@@ -347,32 +366,57 @@ main :: proc() {
 
 		// --- Text on a sine wave ---
 		draw_text_on_wave(
-			&ctx,
+			ctx,
 			"waves of text flowing smoothly",
-			30, 650,
+			30, 680,
 			18,
-			25.0,                   // amplitude
+			20.0,                   // amplitude
 			300.0,                  // wavelength
 			total_time * 2.0,       // phase (animates the wave)
 			COLOR_PINK,
 		)
 
 		// --- Damage numbers (upper right area) ---
-		draw_damage_numbers(&ctx)
+		draw_damage_numbers(ctx)
 
-		// --- Combat log (right side) ---
-		combat_log_draw(&ctx, &combat_log, 850, 300, 300)
+		// --- Combat log (right side, font 0) ---
+		combat_log_draw(ctx, &combat_log, 850, 300, 300)
 
-		// --- HUD info ---
+		// --- HUD info (font 0) ---
 		zoom_buf: [32]u8
 		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
-		slug_draw_text(&ctx, zoom_text, 30, 700, 14, COLOR_DIM)
-		slug_draw_text(&ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 716, 12, COLOR_DIM)
+		slug_draw_text(ctx, zoom_text, 30, 692, 14, COLOR_DIM)
+		slug_draw_text(ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 708, 12, COLOR_DIM)
 
-		slug_end(&ctx)
+		// --- Multi-font demo ---
+		// Liberation Sans (proportional, has kerning)
+		slug_use_font(ctx, 1)
+		slug_draw_text(ctx, "Liberation Sans (proportional)", 30, y_pos, 16, COLOR_DIM)
+		y_pos += 22
+		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
+		y_pos += 34
+		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_CYAN)
+		y_pos += 40
+
+		// Liberation Serif
+		slug_use_font(ctx, 2)
+		slug_draw_text(ctx, "Liberation Serif", 30, y_pos, 16, COLOR_DIM)
+		y_pos += 22
+		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
+		y_pos += 34
+		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_YELLOW)
+		y_pos += 40
+
+		// Back to mono for comparison
+		slug_use_font(ctx, 0)
+		slug_draw_text(ctx, "Liberation Mono (monospace, no kerning)", 30, y_pos, 16, COLOR_DIM)
+		y_pos += 22
+		slug_draw_text(ctx, "AV WA To LT VA — no kerning", 30, y_pos, 28, COLOR_DIM)
+
+		slug_end(ctx)
 
 		// --- Render ---
-		if !slug_draw_frame(&ctx) {
+		if !slug_draw_frame(ctx) {
 			fmt.eprintln("Draw frame failed")
 			break
 		}

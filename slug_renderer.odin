@@ -23,6 +23,8 @@ Slug_Push_Constants :: struct {
 // --- Initialization ---
 
 slug_init :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
+	ctx.window = window
+
 	// Load Vulkan via SDL3
 	if !sdl.Vulkan_LoadLibrary(nil) {
 		fmt.eprintln("SDL3: Failed to load Vulkan library:", sdl.GetError())
@@ -73,12 +75,20 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 		vk.DeviceWaitIdle(ctx.device)
 	}
 
-	// Font
+	// Fonts (slot 0 textures are aliases of ctx.curve_texture/band_texture)
 	font_destroy(&ctx.font)
-
-	// GPU textures
 	gpu_texture_destroy(ctx, &ctx.curve_texture)
 	gpu_texture_destroy(ctx, &ctx.band_texture)
+
+	// Extra font slots (1+)
+	for i in 1..<MAX_FONT_SLOTS {
+		fi := &ctx.font_slots[i]
+		if fi.loaded {
+			font_destroy(&fi.font)
+			gpu_texture_destroy(ctx, &fi.curve_texture)
+			gpu_texture_destroy(ctx, &fi.band_texture)
+		}
+	}
 
 	// Vertex/index buffers
 	if ctx.vertex_buffer != 0 do vk.DestroyBuffer(ctx.device, ctx.vertex_buffer, nil)
@@ -135,6 +145,76 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 
 	if ctx.surface != 0   do vk.DestroySurfaceKHR(ctx.instance, ctx.surface, nil)
 	if ctx.instance != nil do vk.DestroyInstance(ctx.instance, nil)
+}
+
+// --- Swapchain recreation (window resize) ---
+
+@(private="file")
+cleanup_swapchain :: proc(ctx: ^Slug_Context) {
+	// Destroy framebuffers
+	for fb in ctx.framebuffers {
+		if fb != 0 do vk.DestroyFramebuffer(ctx.device, fb, nil)
+	}
+	delete(ctx.framebuffers)
+
+	// Destroy image views
+	for view in ctx.swapchain_views {
+		if view != 0 do vk.DestroyImageView(ctx.device, view, nil)
+	}
+	delete(ctx.swapchain_views)
+
+	// Destroy swapchain images slice (images are owned by the swapchain, not us)
+	delete(ctx.swapchain_images)
+
+	// Destroy old swapchain
+	if ctx.swapchain != 0 do vk.DestroySwapchainKHR(ctx.device, ctx.swapchain, nil)
+}
+
+recreate_swapchain :: proc(ctx: ^Slug_Context) -> bool {
+	// Handle minimized window: wait until we have a non-zero size
+	w, h: i32
+	sdl.GetWindowSizeInPixels(ctx.window, &w, &h)
+	for w == 0 || h == 0 {
+		sdl.GetWindowSizeInPixels(ctx.window, &w, &h)
+		_ = sdl.WaitEvent(nil)
+	}
+
+	vk.DeviceWaitIdle(ctx.device)
+
+	// Free old command buffers (count may change with new swapchain image count)
+	if ctx.command_buffers != nil {
+		vk.FreeCommandBuffers(
+			ctx.device, ctx.command_pool,
+			u32(len(ctx.command_buffers)), raw_data(ctx.command_buffers),
+		)
+		delete(ctx.command_buffers)
+	}
+
+	cleanup_swapchain(ctx)
+
+	if !create_swapchain(ctx, ctx.window) {
+		fmt.eprintln("recreate_swapchain: failed to create swapchain")
+		return false
+	}
+	if !create_image_views(ctx) {
+		fmt.eprintln("recreate_swapchain: failed to create image views")
+		return false
+	}
+	if !create_framebuffers(ctx) {
+		fmt.eprintln("recreate_swapchain: failed to create framebuffers")
+		return false
+	}
+	if !create_command_buffers(ctx) {
+		fmt.eprintln("recreate_swapchain: failed to create command buffers")
+		return false
+	}
+
+	// Reset current_frame in case the new swapchain has fewer images
+	ctx.current_frame = 0
+
+	ctx.framebuffer_resized = false
+
+	return true
 }
 
 // --- Instance creation ---
@@ -351,19 +431,8 @@ create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 	}
 	ctx.swapchain_format = chosen_format
 
-	mode_count: u32
-	vk.GetPhysicalDeviceSurfacePresentModesKHR(ctx.physical_device, ctx.surface, &mode_count, nil)
-	modes := make([]vk.PresentModeKHR, mode_count)
-	defer delete(modes)
-	vk.GetPhysicalDeviceSurfacePresentModesKHR(ctx.physical_device, ctx.surface, &mode_count, raw_data(modes))
-
+	// FIFO = vsync, avoids tearing on Wayland compositors
 	chosen_mode := vk.PresentModeKHR.FIFO
-	for mode in modes {
-		if mode == .MAILBOX {
-			chosen_mode = .MAILBOX
-			break
-		}
-	}
 
 	extent: vk.Extent2D
 	if capabilities.currentExtent.width != max(u32) {
@@ -881,7 +950,7 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 	pool_sizes := [1]vk.DescriptorPoolSize {
 		{
 			type            = .COMBINED_IMAGE_SAMPLER,
-			descriptorCount = 2,
+			descriptorCount = 2 * MAX_FONT_SLOTS,  // 2 textures per font
 		},
 	}
 
@@ -889,7 +958,7 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
 		poolSizeCount = len(pool_sizes),
 		pPoolSizes    = &pool_sizes[0],
-		maxSets       = 1,
+		maxSets       = MAX_FONT_SLOTS,
 	}
 
 	result := vk.CreateDescriptorPool(ctx.device, &pool_info, nil, &ctx.descriptor_pool)
@@ -945,6 +1014,14 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 
 	vk.UpdateDescriptorSets(ctx.device, len(writes), &writes[0], 0, nil)
 
+	// Register as font slot 0
+	ctx.font_slots[0].curve_texture = ctx.curve_texture
+	ctx.font_slots[0].band_texture = ctx.band_texture
+	ctx.font_slots[0].descriptor_set = ctx.descriptor_set
+	ctx.font_slots[0].loaded = true
+	ctx.font_slots[0].name = "default"
+	ctx.font_slot_count = max(ctx.font_slot_count, 1)
+
 	fmt.println("Font textures uploaded to GPU")
 	return true
 }
@@ -955,18 +1032,161 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 
 slug_begin :: proc(ctx: ^Slug_Context) {
 	ctx.quad_count = 0
+	ctx.active_font_idx = 0
+	for i in 0..<MAX_FONT_SLOTS {
+		ctx.font_quad_start[i] = 0
+		ctx.font_quad_count[i] = 0
+	}
+}
+
+// Switch the active font for subsequent slug_draw_text calls.
+// Font slot 0 is the default (ctx.font).
+slug_use_font :: proc(ctx: ^Slug_Context, slot: int) {
+	if slot < 0 || slot >= ctx.font_slot_count do return
+	// Record where the previous font's quads ended
+	prev := ctx.active_font_idx
+	ctx.font_quad_count[prev] = ctx.quad_count - ctx.font_quad_start[prev]
+	// Start the new font's quads at the current position
+	ctx.active_font_idx = slot
+	ctx.font_quad_start[slot] = ctx.quad_count
+}
+
+// Get the Font pointer for the currently active font slot.
+slug_active_font :: proc(ctx: ^Slug_Context) -> ^Font {
+	slot := ctx.active_font_idx
+	if slot == 0 {
+		return &ctx.font
+	}
+	return &ctx.font_slots[slot].font
+}
+
+// Load a font into a slot (slot 0 is reserved for ctx.font).
+slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: string) -> bool {
+	if slot < 1 || slot >= MAX_FONT_SLOTS {
+		fmt.eprintln("Invalid font slot:", slot)
+		return false
+	}
+
+	fi := &ctx.font_slots[slot]
+
+	font, font_ok := font_load(path)
+	if !font_ok {
+		fmt.eprintln("Failed to load font:", path)
+		return false
+	}
+	fi.font = font
+	fi.name = name
+
+	font_load_ascii(&fi.font)
+
+	for gi in 0..<MAX_CACHED_GLYPHS {
+		g := &fi.font.glyphs[gi]
+		if g.valid && len(g.curves) > 0 {
+			glyph_process(g)
+		}
+	}
+
+	pack := pack_glyph_textures(&fi.font)
+	defer pack_result_destroy(&pack)
+
+	// Upload curve texture
+	curve_data_size := len(pack.curve_data) * size_of([4]u16)
+	curve_tex, curve_ok := gpu_texture_create(
+		ctx,
+		pack.curve_width, pack.curve_height,
+		.R16G16B16A16_SFLOAT,
+		raw_data(pack.curve_data),
+		curve_data_size,
+	)
+	if !curve_ok do return false
+	fi.curve_texture = curve_tex
+
+	// Upload band texture
+	band_data_size := len(pack.band_data) * size_of([2]u16)
+	band_tex, band_ok := gpu_texture_create(
+		ctx,
+		pack.band_width, pack.band_height,
+		.R16G16_UINT,
+		raw_data(pack.band_data),
+		band_data_size,
+	)
+	if !band_ok do return false
+	fi.band_texture = band_tex
+
+	// Allocate descriptor set from the existing pool
+	alloc_info := vk.DescriptorSetAllocateInfo{
+		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
+		descriptorPool     = ctx.descriptor_pool,
+		descriptorSetCount = 1,
+		pSetLayouts        = &ctx.descriptor_set_layout,
+	}
+
+	result := vk.AllocateDescriptorSets(ctx.device, &alloc_info, &fi.descriptor_set)
+	if result != .SUCCESS {
+		fmt.eprintln("Failed to allocate descriptor set for font slot:", slot)
+		return false
+	}
+
+	// Write descriptor set
+	curve_image_info := vk.DescriptorImageInfo{
+		imageLayout = .SHADER_READ_ONLY_OPTIMAL,
+		imageView   = fi.curve_texture.view,
+		sampler     = fi.curve_texture.sampler,
+	}
+	band_image_info := vk.DescriptorImageInfo{
+		imageLayout = .SHADER_READ_ONLY_OPTIMAL,
+		imageView   = fi.band_texture.view,
+		sampler     = fi.band_texture.sampler,
+	}
+	writes := [2]vk.WriteDescriptorSet{
+		{
+			sType           = .WRITE_DESCRIPTOR_SET,
+			dstSet          = fi.descriptor_set,
+			dstBinding      = 0,
+			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			descriptorCount = 1,
+			pImageInfo      = &curve_image_info,
+		},
+		{
+			sType           = .WRITE_DESCRIPTOR_SET,
+			dstSet          = fi.descriptor_set,
+			dstBinding      = 1,
+			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			descriptorCount = 1,
+			pImageInfo      = &band_image_info,
+		},
+	}
+	vk.UpdateDescriptorSets(ctx.device, len(writes), &writes[0], 0, nil)
+
+	fi.loaded = true
+	if slot >= ctx.font_slot_count {
+		ctx.font_slot_count = slot + 1
+	}
+	fmt.printf("Font slot %d loaded: %s\n", slot, name)
+	return true
 }
 
 // Measure a string's dimensions without drawing.
 // Returns (width, height) in screen pixels at the given font_size.
-measure_text :: proc(font: ^Font, text: string, font_size: f32) -> (width: f32, height: f32) {
+measure_text :: proc(font: ^Font, text: string, font_size: f32, use_kerning: bool = true) -> (width: f32, height: f32) {
 	pen_x: f32 = 0
+	prev_rune: rune = 0
 	for ch in text {
 		idx := int(ch)
-		if idx < 0 || idx >= MAX_CACHED_GLYPHS do continue
+		if idx < 0 || idx >= MAX_CACHED_GLYPHS {
+			prev_rune = ch
+			continue
+		}
 		g := &font.glyphs[idx]
-		if !g.valid do continue
+		if !g.valid {
+			prev_rune = ch
+			continue
+		}
+		if use_kerning && prev_rune != 0 {
+			pen_x += font_get_kerning(font, prev_rune, ch) * font_size
+		}
 		pen_x += g.advance_width * font_size
+		prev_rune = ch
 	}
 	return pen_x, (font.ascent - font.descent) * font_size
 }
@@ -980,32 +1200,45 @@ slug_draw_text :: proc(
 	x, y: f32,
 	font_size: f32,
 	color: [4]f32,
+	use_kerning: bool = true,
 ) {
-	font := &ctx.font
+	font := slug_active_font(ctx)
 	pen_x := x
+
+	prev_rune: rune = 0
 
 	for ch in text {
 		idx := int(ch)
-		if idx < 0 || idx >= MAX_CACHED_GLYPHS do continue
+		if idx < 0 || idx >= MAX_CACHED_GLYPHS {
+			prev_rune = ch
+			continue
+		}
 
 		g := &font.glyphs[idx]
-		if !g.valid do continue
+		if !g.valid {
+			prev_rune = ch
+			continue
+		}
+
+		// Apply kerning from previous character
+		if use_kerning && prev_rune != 0 {
+			kern := font_get_kerning(font, prev_rune, ch)
+			pen_x += kern * font_size
+		}
 
 		// Position the glyph quad in Y-down screen space.
-		// y is the baseline. Font bbox_max.y is the top of the glyph (positive, like ascent).
-		// In Y-down screen space, the top of the glyph is above the baseline = smaller Y.
 		glyph_x := pen_x + g.bbox_min.x * font_size
-		glyph_y := y - g.bbox_max.y * font_size  // top of glyph in screen coords
+		glyph_y := y - g.bbox_max.y * font_size
 
 		glyph_w := (g.bbox_max.x - g.bbox_min.x) * font_size
 		glyph_h := (g.bbox_max.y - g.bbox_min.y) * font_size
 
-		// Skip empty glyphs (e.g. space) — still advance
 		if len(g.curves) > 0 && ctx.quad_count < MAX_GLYPH_QUADS {
 			emit_glyph_quad(ctx, g, glyph_x, glyph_y, glyph_w, glyph_h, color)
 		}
 
 		pen_x += g.advance_width * font_size
+		prev_rune = ch
 	}
 }
 
@@ -1166,7 +1399,9 @@ emit_glyph_quad_transformed :: proc(
 }
 
 slug_end :: proc(ctx: ^Slug_Context) {
-	// Nothing to flush — vertices are already in the mapped buffer
+	// Finalize the last active font's quad count
+	prev := ctx.active_font_idx
+	ctx.font_quad_count[prev] = ctx.quad_count - ctx.font_quad_start[prev]
 }
 
 // --- Draw frame ---
@@ -1176,21 +1411,29 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 
 	// Wait for this frame's fence
 	vk.WaitForFences(ctx.device, 1, &ctx.in_flight_fences[frame], true, max(u64))
-	vk.ResetFences(ctx.device, 1, &ctx.in_flight_fences[frame])
 
 	// Acquire next swapchain image
 	image_index: u32
-	result := vk.AcquireNextImageKHR(
+	acquire_result := vk.AcquireNextImageKHR(
 		ctx.device, ctx.swapchain, max(u64),
 		ctx.image_available[frame], 0, &image_index,
 	)
-	if result == .ERROR_OUT_OF_DATE_KHR {
-		return true  // Need to recreate swapchain
+	if acquire_result == .ERROR_OUT_OF_DATE_KHR {
+		// Swapchain is incompatible with the surface — must recreate before drawing.
+		// Do NOT reset the fence: AcquireNextImage failed, so nothing was submitted
+		// against it. The fence is still signaled from the previous frame's completion.
+		if !recreate_swapchain(ctx) do return false
+		return true
 	}
-	if result != .SUCCESS && result != .SUBOPTIMAL_KHR {
-		fmt.eprintln("Failed to acquire swapchain image:", result)
+	if acquire_result != .SUCCESS && acquire_result != .SUBOPTIMAL_KHR {
+		fmt.eprintln("Failed to acquire swapchain image:", acquire_result)
 		return false
 	}
+
+	// Only reset the fence AFTER we know we will actually submit work.
+	// If we reset before acquire and acquire fails, the fence stays unsignaled
+	// and WaitForFences deadlocks on the next frame.
+	vk.ResetFences(ctx.device, 1, &ctx.in_flight_fences[frame])
 
 	cmd := ctx.command_buffers[image_index]
 	vk.ResetCommandBuffer(cmd, {})
@@ -1236,23 +1479,16 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		// Bind pipeline
 		vk.CmdBindPipeline(cmd, .GRAPHICS, ctx.pipeline)
 
-		// Bind descriptor set (curve + band textures)
-		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_set, 0, nil)
-
 		// Push constants: orthographic projection + viewport
 		w := f32(ctx.swapchain_extent.width)
 		h := f32(ctx.swapchain_extent.height)
 
-		// Orthographic projection: (0,0) at top-left, Y increases downward.
-		// Vulkan NDC has Y pointing down, so bottom=h, top=0 gives us
-		// natural screen coordinates.
 		proj := linalg.matrix_ortho3d_f32(0, w, 0, h, -1, 1)
 
 		// View transform: zoom centered on screen center, then pan
 		zoom := ctx.zoom if ctx.zoom > 0 else 1.0
 		cx := w * 0.5
 		cy := h * 0.5
-		// Translate to origin, scale, translate back, then apply pan
 		view := linalg.matrix4_translate_f32({cx + ctx.pan.x, cy + ctx.pan.y, 0}) *
 		        linalg.matrix4_scale_f32({zoom, zoom, 1}) *
 		        linalg.matrix4_translate_f32({-cx, -cy, 0})
@@ -1269,8 +1505,19 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		vk.CmdBindVertexBuffers(cmd, 0, 1, &ctx.vertex_buffer, &vb_offset)
 		vk.CmdBindIndexBuffer(cmd, ctx.index_buffer, 0, .UINT32)
 
-		// Draw all glyphs
-		vk.CmdDrawIndexed(cmd, ctx.quad_count * INDICES_PER_QUAD, 1, 0, 0, 0)
+		// Issue per-font draw calls (each font has its own textures/descriptor set)
+		for fi in 0..<MAX_FONT_SLOTS {
+			qcount := ctx.font_quad_count[fi]
+			if qcount == 0 do continue
+
+			ds := ctx.font_slots[fi].descriptor_set
+			if ds == 0 do continue
+
+			vk.CmdBindDescriptorSets(cmd, .GRAPHICS, ctx.pipeline_layout, 0, 1, &ds, 0, nil)
+
+			first_index := ctx.font_quad_start[fi] * INDICES_PER_QUAD
+			vk.CmdDrawIndexed(cmd, qcount * INDICES_PER_QUAD, 1, first_index, 0, 0)
+		}
 	}
 
 	vk.CmdEndRenderPass(cmd)
@@ -1289,9 +1536,9 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		pSignalSemaphores    = &ctx.render_finished[frame],
 	}
 
-	result = vk.QueueSubmit(ctx.graphics_queue, 1, &submit_info, ctx.in_flight_fences[frame])
-	if result != .SUCCESS {
-		fmt.eprintln("Failed to submit draw command:", result)
+	submit_result := vk.QueueSubmit(ctx.graphics_queue, 1, &submit_info, ctx.in_flight_fences[frame])
+	if submit_result != .SUCCESS {
+		fmt.eprintln("Failed to submit draw command:", submit_result)
 		return false
 	}
 
@@ -1305,7 +1552,16 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		pImageIndices      = &image_index,
 	}
 
-	vk.QueuePresentKHR(ctx.present_queue, &present_info)
+	present_result := vk.QueuePresentKHR(ctx.present_queue, &present_info)
+	if present_result == .ERROR_OUT_OF_DATE_KHR || present_result == .SUBOPTIMAL_KHR || ctx.framebuffer_resized {
+		// Swapchain is stale — recreate it. This is the correct place to handle
+		// SUBOPTIMAL too: the frame was presented, but the swapchain no longer
+		// matches the surface optimally (e.g. after a resize on Wayland).
+		if !recreate_swapchain(ctx) do return false
+	} else if present_result != .SUCCESS {
+		fmt.eprintln("Failed to present swapchain image:", present_result)
+		return false
+	}
 
 	ctx.current_frame = (frame + 1) % u32(len(ctx.swapchain_images))
 

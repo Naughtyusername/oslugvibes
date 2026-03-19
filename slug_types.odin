@@ -1,6 +1,7 @@
 package slugvibes
 
 import vk "vendor:vulkan"
+import sdl "vendor:sdl3"
 import stbtt "vendor:stb/truetype"
 
 // ===================================================
@@ -100,6 +101,19 @@ Font :: struct {
 	glyphs:         [MAX_CACHED_GLYPHS]Glyph_Data,
 }
 
+// Maximum number of fonts loaded simultaneously
+MAX_FONT_SLOTS :: 4
+
+// A loaded font with its GPU resources
+Font_Instance :: struct {
+	font:           Font,
+	curve_texture:  GPU_Texture,
+	band_texture:   GPU_Texture,
+	descriptor_set: vk.DescriptorSet,
+	loaded:         bool,
+	name:           string,  // human-readable label for the demo
+}
+
 // Vulkan GPU texture handle
 GPU_Texture :: struct {
 	image:   vk.Image,
@@ -112,6 +126,9 @@ GPU_Texture :: struct {
 
 // The main Vulkan rendering context for Slug
 Slug_Context :: struct {
+	// Window handle (needed for swapchain recreation on resize)
+	window:            ^sdl.Window,
+
 	// Core Vulkan state
 	instance:          vk.Instance,
 	debug_messenger:   vk.DebugUtilsMessengerEXT,
@@ -164,14 +181,24 @@ Slug_Context :: struct {
 	in_flight_fences:  []vk.Fence,
 	current_frame:     u32,
 
+	// Resize tracking
+	framebuffer_resized: bool,
+
 	// Per-frame draw state
 	quad_count:        u32,
+
+	// Multi-font draw state: per-font vertex ranges for batched draw calls
+	font_quad_start:   [MAX_FONT_SLOTS]u32,
+	font_quad_count:   [MAX_FONT_SLOTS]u32,
+	active_font_idx:   int,
 
 	// View transform (zoom/pan)
 	zoom:              f32,
 	pan:               [2]f32,
 
-	// Font
-	font:              Font,
+	// Fonts
+	font:              Font,              // Default font (slot 0, backward compat)
+	font_slots:        [MAX_FONT_SLOTS]Font_Instance,
+	font_slot_count:   int,
 }
 
