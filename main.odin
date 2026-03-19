@@ -374,159 +374,105 @@ main :: proc() {
 		)
 		y_pos += 30
 
-		// Size ramp
-		sizes := [?]f32{12, 16, 20, 28, 36, 48}
-		for size in sizes {
-			slug_draw_text(ctx, "Slug", 30, y_pos, size, COLOR_PINK)
-			y_pos += size + 8
+		// Size ramp (compact, horizontal)
+		size_x: f32 = 30
+		for size in ([?]f32{12, 16, 20, 28, 36}) {
+			slug_draw_text(ctx, "Slug", size_x, y_pos, size, COLOR_PINK)
+			size_x += size * 3.2 + 8
 		}
-
-		// Resolution independence callout
-		y_pos += 10
-		slug_draw_text(ctx, "Resolution Independent!", 30, y_pos, 36, COLOR_ORANGE)
 		y_pos += 50
 
-		// --- Rotating text ---
-		// Slowly spinning text in the upper-right area
-		draw_text_rotated(
-			ctx,
-			"Resolution Independent!",
-			900,
-			120,
-			22,
-			total_time * 0.5, // radians, slow spin
-			COLOR_ORANGE,
-		)
+		// Resolution independence callout
+		slug_draw_text(ctx, "Resolution Independent!", 30, y_pos, 32, COLOR_ORANGE)
+		y_pos += 45
 
-		// Second rotating text, opposite direction
-		draw_text_rotated(
-			ctx,
-			"* GPU Bezier Curves *",
-			900,
-			120,
-			16,
-			-total_time * 0.3,
-			COLOR_CYAN,
-		)
-
-		// --- Text on a circle ---
-		draw_text_on_circle(
-			ctx,
-			"  Slug Patent Now Public Domain!  ",
-			640,
-			420,
-			150, // radius
-			-total_time * 0.4, // rotating start angle
-			18,
-			COLOR_YELLOW,
-		)
-
-		// Inner circle, opposite direction
-		draw_text_on_circle(
-			ctx,
-			"  Odin + Vulkan + SDL3  ",
-			640,
-			420,
-			100,
-			total_time * 0.6,
-			14,
-			COLOR_GREEN,
-		)
-
-		// --- Text on a sine wave ---
+		// --- Text on a sine wave (font 0) ---
 		draw_text_on_wave(
 			ctx,
 			"waves of text flowing smoothly",
 			30,
-			680,
-			18,
-			20.0, // amplitude
-			300.0, // wavelength
-			total_time * 2.0, // phase (animates the wave)
+			y_pos + 10,
+			16,
+			15.0,
+			300.0,
+			total_time * 2.0,
 			COLOR_PINK,
 		)
 
-		// --- SVG Icons demo ---
-		// Icons rendered through the same Slug pipeline as text — resolution independent!
-		slug_draw_text(ctx, "SVG Icons (vector art via Slug):", 500, 560, 14, COLOR_DIM)
-		icon_y: f32 = 600
-		icon_size: f32 = 48
-		icon_spacing: f32 = 70
-		icon_start_x: f32 = 535
+		// ===== RIGHT SIDE (all font 0) =====
+
+		// --- Rotating text (upper right) ---
+		draw_text_rotated(ctx, "Resolution Independent!", 1000, 100, 20, total_time * 0.5, COLOR_ORANGE)
+		draw_text_rotated(ctx, "* GPU Bezier Curves *", 1000, 100, 14, -total_time * 0.3, COLOR_CYAN)
+
+		// --- Text on a circle (center right) ---
+		draw_text_on_circle(
+			ctx,
+			"  Slug Patent Now Public Domain!  ",
+			960, 350, 130,
+			-total_time * 0.4, 16, COLOR_YELLOW,
+		)
+		draw_text_on_circle(
+			ctx,
+			"  Odin + Vulkan + SDL3  ",
+			960, 350, 85,
+			total_time * 0.6, 12, COLOR_GREEN,
+		)
+
+		// --- SVG Icons demo (right side, below circles) ---
+		slug_draw_text(ctx, "SVG Icons (vector art via Slug):", 790, 510, 14, COLOR_DIM)
+		icon_y: f32 = 555
+		icon_size: f32 = 44
+		icon_spacing: f32 = 65
+		icon_start_x: f32 = 825
 		icon_colors := [?][4]f32{COLOR_CYAN, COLOR_RED, COLOR_WHITE, COLOR_ORANGE, COLOR_GREEN}
 		icon_labels := [?]string{"Shield", "Swords", "Skull", "Fire", "Potion"}
 		for i in 0 ..< len(ICON_PATHS) {
 			ix := icon_start_x + f32(i) * icon_spacing
-			// Pulsing size effect
 			pulse := 1.0 + math.sin(total_time * 2.0 + f32(i) * 1.2) * 0.1
 			slug_draw_icon(ctx, ICON_PATHS[i].slot, ix, icon_y, icon_size * pulse, icon_colors[i])
-			// Label below
-			slug_draw_text(ctx, icon_labels[i], ix - 16, icon_y + 35, 10, COLOR_DIM)
+			slug_draw_text(ctx, icon_labels[i], ix - 16, icon_y + 32, 10, COLOR_DIM)
 		}
 
 		// --- Damage numbers (upper right area) ---
 		draw_damage_numbers(ctx)
 
-		// --- Combat log (right side, font 0) ---
-		combat_log_draw(ctx, &combat_log, 850, 300, 300)
+		// --- Combat log (right side) ---
+		combat_log_draw(ctx, &combat_log, 640, 620, 100)
 
-		// --- HUD info (font 0) ---
-		zoom_buf: [32]u8
-		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
-		slug_draw_text(ctx, zoom_text, 30, 692, 14, COLOR_DIM)
+		// ===== HUD (pinned to corners, font 0) =====
 
-		// FPS counter — pinned top-left
+		// FPS + quad count — top right
 		fps_buf: [48]u8
 		fps := dt > 0 ? 1.0 / dt : 0
 		fps_text := fmt.bprintf(fps_buf[:], "%.0f FPS | %d quads", fps, ctx.quad_count)
-		slug_draw_text(ctx, fps_text, 1100, 16, 16, COLOR_YELLOW)
+		slug_draw_text(ctx, fps_text, 1100, 14, 14, COLOR_YELLOW)
 
-		slug_draw_text(
-			ctx,
-			"Scroll: zoom | MMB: pan | R: reset | Space: hit!",
-			30,
-			708,
-			12,
-			COLOR_DIM,
-		)
+		// Zoom — bottom left
+		zoom_buf: [32]u8
+		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
+		slug_draw_text(ctx, zoom_text, 30, 698, 12, COLOR_DIM)
 
-		// --- Multi-font kerning comparison ---
-		// Mono comparison first (still on font 0, before we switch away)
-		slug_draw_text(ctx, "Liberation Mono (monospace, no kerning)", 30, y_pos, 16, COLOR_DIM)
-		y_pos += 22
-		slug_draw_text(ctx, "AV WA To LT VA — no kerning", 30, y_pos, 28, COLOR_DIM)
-		y_pos += 40
+		// Controls — bottom left
+		slug_draw_text(ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 710, 11, COLOR_DIM)
 
-		// Liberation Sans (proportional, has kerning)
+		// ===== FONT 1: Liberation Sans — kerning comparison =====
 		slug_use_font(ctx, 1)
-		slug_draw_text(ctx, "Liberation Sans (proportional)", 30, y_pos, 16, COLOR_DIM)
-		y_pos += 22
-		slug_draw_text(
-			ctx,
-			"The quick brown fox jumps over the lazy dog",
-			30,
-			y_pos,
-			24,
-			COLOR_WHITE,
-		)
-		y_pos += 34
-		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_CYAN)
-		y_pos += 40
+		sans_y := y_pos + 54
+		slug_draw_text(ctx, "Liberation Sans — kerning comparison:", 30, sans_y, 14, COLOR_DIM)
+		sans_y += 20
+		slug_draw_text(ctx, "AV WA To LT VA — no kerning", 30, sans_y, 24, COLOR_DIM, use_kerning = false)
+		sans_y += 28
+		slug_draw_text(ctx, "AV WA To LT VA — kerned", 30, sans_y, 24, COLOR_CYAN)
 
-		// Liberation Serif
+		// ===== FONT 2: Liberation Serif =====
 		slug_use_font(ctx, 2)
-		slug_draw_text(ctx, "Liberation Serif", 30, y_pos, 16, COLOR_DIM)
-		y_pos += 22
-		slug_draw_text(
-			ctx,
-			"The quick brown fox jumps over the lazy dog",
-			30,
-			y_pos,
-			24,
-			COLOR_WHITE,
-		)
-		y_pos += 34
-		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_YELLOW)
+		serif_y := sans_y + 34
+		slug_draw_text(ctx, "Liberation Serif", 30, serif_y, 14, COLOR_DIM)
+		serif_y += 20
+		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, serif_y, 20, COLOR_WHITE)
+		serif_y += 28
+		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, serif_y, 24, COLOR_YELLOW)
 
 		slug_end(ctx)
 

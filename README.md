@@ -41,6 +41,8 @@ This implementation references Lengyel's public HLSL/GLSL shader code and the Sl
 - **Rotating text** — arbitrary-angle rendering using full 2x2 Jacobian transform
 - **Circular text** — glyphs positioned and rotated along a circular arc
 - **Wave text** — glyphs following a sine wave path, rotated to match the tangent
+- **Drop shadow** — renders text twice with offset for a shadow effect, configurable offset and color
+- **Typewriter reveal** — characters appear one by one based on elapsed time, configurable speed
 - **Text measurement** — `measure_text()` returns width/height without drawing
 
 ### SVG Vector Icons
@@ -52,6 +54,7 @@ This implementation references Lengyel's public HLSL/GLSL shader code and the Sl
 - **Damage numbers** — floating combat text that pops large, shrinks, and fades as it rises
 - **Scrolling combat log** — color-coded RPG-style messages with age-based fade
 - **Interactive zoom/pan** — mouse wheel zoom, middle-click drag pan
+- **FPS counter** — live frames-per-second and quad count display
 
 ## Architecture
 
@@ -62,7 +65,7 @@ slug_types.odin          All shared types (vertex format, glyph data, Vulkan con
 ttf_parser.odin          Font loading via stb_truetype, kerning, cubic-to-quadratic conversion
 glyph_processor.odin     Band generation, curve sorting, texture packing, f32→f16
 slug_renderer.odin       Vulkan init, pipeline, multi-font draw calls, text drawing
-text_effects.odin        Per-character effects (rainbow, wobble, shake, rotation, paths)
+text_effects.odin        Per-character effects (rainbow, wobble, shake, rotation, paths, shadow, typewriter, combat log)
 vulkan_helpers.odin      Buffer/texture creation, image transitions, shader modules
 shaders/slug.vert        Vertex shader — dynamic dilation, data unpacking
 shaders/slug.frag        Fragment shader — core Slug algorithm (ray intersection, winding, coverage)
@@ -268,8 +271,7 @@ The HLSL→GLSL shader port was done mechanically from Eric Lengyel's publicly a
 
 ### For Roguelikes / Games
 - **Dynamic UI scaling** — since text is resolution-independent, the entire UI can scale smoothly with a slider or pinch gesture
-- **Typewriter reveal** — animate characters appearing one by one, trivial with per-character drawing
-- **Outlined/shadowed text** — render the same text twice with offset for drop shadow, or with slightly dilated quads for outline
+- **Outlined text** — render with slightly dilated quads for outline effect (drop shadow is already implemented)
 - **Text wrapping** — automatic line breaking using `measure_text()`
 
 ### Technical Improvements

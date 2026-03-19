@@ -13,10 +13,10 @@ Slug renders resolution-independent text by evaluating quadratic Bézier curves 
 | `ttf_parser.odin` | Font loading via `vendor:stb/truetype`. Kerning via kern table. Cubic-to-quadratic conversion via De Casteljau subdivision. |
 | `glyph_processor.odin` | Band generation (spatial acceleration), curve sorting, texture packing, f32→f16 conversion |
 | `slug_renderer.odin` | Full Vulkan init (SDL3 surface), pipeline, multi-font descriptor sets, vertex emission, per-font draw calls |
-| `text_effects.odin` | Per-character effects: rainbow, wobble, shake, rotation, circular path, sine wave path |
+| `text_effects.odin` | Per-character effects: rainbow, wobble, shake, rotation, circular path, sine wave path, drop shadow, typewriter reveal, combat log |
 | `vulkan_helpers.odin` | Buffer creation, texture upload, image layout transitions, shader module loading |
 | `svg_parser.odin` | SVG path parser — loads single-path SVG icons into font glyph slots for rendering through the same pipeline as text |
-| `main.odin` | Entry point, demo scenes, damage numbers, combat log, SVG icon demo, event loop |
+| `main.odin` | Entry point, demo scenes, damage numbers, SVG icon demo, FPS counter, event loop |
 | `shaders/slug.vert` | GLSL 4.50 vertex shader — dynamic dilation, data unpacking |
 | `shaders/slug.frag` | GLSL 4.50 fragment shader — core Slug algorithm (ray-curve intersection, winding number, coverage) |
 
@@ -49,7 +49,7 @@ This is a vibe-code project — Claude can write code directly (not teaching mod
 
 ## Known Issues / Gotchas
 - Vulkan ortho projection: `matrix_ortho3d_f32(0, w, 0, h, ...)` NOT `(0, w, h, 0, ...)` — Vulkan Y-down means bottom < top or everything renders upside-down
-- `Slug_Context` is ~340KB on the stack due to font arrays (triggers compiler warning, works fine)
+- `Slug_Context` is ~340KB due to font arrays — heap-allocated via `new()` in main to avoid stack overflow
 - `emit_glyph_quad` and `emit_glyph_quad_transformed` must NOT be `@(private="file")` — used by `text_effects.odin`
 - Swapchain recreation on resize is implemented (tracks `framebuffer_resized` flag + handles `OUT_OF_DATE` / `SUBOPTIMAL`)
 - Monospace fonts have zero kerning by definition — test kerning with proportional fonts
