@@ -1031,6 +1031,13 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 // ===================================================
 
 slug_begin :: proc(ctx: ^Slug_Context) {
+	// Wait for ALL in-flight GPU work to complete before overwriting the
+	// shared vertex buffer. We have one vertex buffer but multiple frames
+	// in flight — any of them could still be reading from it.
+	if ctx.device != nil {
+		vk.DeviceWaitIdle(ctx.device)
+	}
+
 	ctx.quad_count = 0
 	ctx.active_font_idx = 0
 	for i in 0..<MAX_FONT_SLOTS {
@@ -1409,9 +1416,7 @@ slug_end :: proc(ctx: ^Slug_Context) {
 slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 	frame := ctx.current_frame
 
-	// Wait for this frame's fence
-	vk.WaitForFences(ctx.device, 1, &ctx.in_flight_fences[frame], true, max(u64))
-
+	// Fence wait already done in slug_begin() to protect vertex buffer writes.
 	// Acquire next swapchain image
 	image_index: u32
 	acquire_result := vk.AcquireNextImageKHR(
