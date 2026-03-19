@@ -1147,7 +1147,7 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		// Orthographic projection: (0,0) at top-left, Y increases downward.
 		// Vulkan NDC has Y pointing down, so bottom=h, top=0 gives us
 		// natural screen coordinates.
-		proj := linalg.matrix_ortho3d_f32(0, w, h, 0, -1, 1)
+		proj := linalg.matrix_ortho3d_f32(0, w, 0, h, -1, 1)
 
 		// View transform: zoom centered on screen center, then pan
 		zoom := ctx.zoom if ctx.zoom > 0 else 1.0

@@ -12,7 +12,15 @@ Each glyph is rendered as a single screen-space quad. The fragment shader:
 3. Uses an 8-class equivalence LUT (`0x2E74`) for robust root eligibility classification
 4. Accumulates a fractional winding number for antialiased coverage
 
-The Slug patent (US 10,936,792) was **dedicated to the public domain** by Eric Lengyel on March 17, 2026. This implementation references his public HLSL/GLSL shader code and the Slug Library documentation.
+### Patent History
+
+The Slug algorithm was patented by Eric Lengyel in 2021 (US Patent 10,936,792). For years it was a technically superior approach to GPU text rendering that nobody could freely use — the patent covered the core innovation of using quadratic polynomial root-finding with winding number accumulation in a fragment shader. Commercial use required licensing the Slug Library from Terathon Software.
+
+On **March 17, 2026**, Lengyel dedicated the patent to the public domain via a Terminal Disclaimer, making the algorithm freely available to everyone. Two days later, this implementation was written.
+
+This is significant because most game engines and applications still use bitmap atlas rendering (Freetype → texture atlas → textured quads) or signed distance fields (SDF, popularized by Valve in 2007). Both approaches bake glyph shapes into textures at fixed resolutions, which means they blur or show artifacts at extreme zoom levels. Slug has no such limitation — it evaluates the actual mathematical curves per-pixel, producing perfect results at any scale. Now that the patent is free, there's no reason new projects can't adopt this approach.
+
+This implementation references Lengyel's public HLSL/GLSL shader code and the Slug Library documentation.
 
 ## Features
 
