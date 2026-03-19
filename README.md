@@ -150,11 +150,16 @@ bash build.sh
 
 ### Windows
 
+**Prerequisites:**
+- **Visual Studio Build Tools** (or full Visual Studio) — required for `nmake` and the MSVC linker that Odin uses. Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). Select the "C++ Build Tools" workload.
+
 1. **Vulkan SDK** — Download and install from [vulkan.lunarg.com](https://vulkan.lunarg.com/sdk/home). The SDK includes `glslc.exe`, the Vulkan loader, and validation layers. Make sure the SDK `Bin` directory is on your `PATH` (the installer usually does this).
 
-2. **SDL3** — Download the SDL3 runtime DLL from [libsdl.org](https://libsdl.org). Place `SDL3.dll` somewhere on your `PATH` or in the project directory. You also need the development library (import lib) for linking — Odin's vendor bindings expect it.
+2. **SDL3** — Go to the [SDL3 releases page](https://github.com/libsdl-org/SDL/releases) and download the **VC** development package (e.g., `SDL3-devel-3.x.x-VC.zip`). Extract it. You need two things from it:
+   - `SDL3.dll` — copy this into the project directory (next to where `slugvibes.exe` will be built)
+   - `SDL3.lib` — the import library. Either copy it to your project directory or add its location to your `LIB` environment variable so the linker can find it.
 
-3. **Odin** — Install from [odin-lang.org](https://odin-lang.org). Build the stb vendor lib from a **Developer Command Prompt**:
+3. **Odin** — Install from [odin-lang.org](https://odin-lang.org). Build the stb vendor lib from a **Developer Command Prompt** (not a regular cmd — search "Developer Command Prompt" in the Start menu):
    ```cmd
    cd %ODIN_ROOT%\vendor\stb\src
    nmake -f Windows.mak
@@ -168,6 +173,8 @@ slugvibes.exe
 
 Build and run (PowerShell):
 ```powershell
+# If you get an execution policy error, run this first:
+# Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 .\build.ps1
 .\slugvibes.exe
 ```
@@ -216,8 +223,12 @@ The program loads fonts from `assets/fonts/` using relative paths. You must run 
 
 **`SDL3` not found / linker errors about SDL**
 - **Linux:** Install `sdl3` (Arch) or `libsdl3-dev` (Ubuntu/Debian)
-- **Windows:** Download SDL3 development libraries and ensure the import lib and DLL are findable
+- **Windows:** Download the SDL3 **VC development package** from the SDL3 GitHub releases. Place `SDL3.lib` where the linker can find it and `SDL3.dll` next to the exe.
+- **macOS:** `brew install sdl3`
 - Check that Odin's `vendor/sdl3` bindings match your installed SDL3 version
+
+**`SDL3.dll not found` or crash on startup (Windows)**
+- Place `SDL3.dll` in the same directory as `slugvibes.exe` (the project root). The OS searches the exe's directory for DLLs first.
 
 **Vulkan validation layer not found (`VK_LAYER_KHRONOS_validation`)**
 - **Linux (Arch):** This is included in `vulkan-devel`. If you installed only `vulkan-icd-loader`, add `vulkan-validation-layers`.

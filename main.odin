@@ -19,6 +19,24 @@ FONT_PATH :: "assets/fonts/LiberationMono-Regular.ttf"
 FONT_PATH_SANS :: "assets/fonts/LiberationSans-Regular.ttf"
 FONT_PATH_SERIF :: "assets/fonts/LiberationSerif-Regular.ttf"
 
+// SVG icon paths and glyph slot indices (128+ to avoid ASCII collision)
+ICON_SHIELD :: 128
+ICON_SWORDS :: 129
+ICON_SKULL :: 130
+ICON_FIREBALL :: 131
+ICON_POTION :: 132
+
+ICON_PATHS := [?]struct {
+	slot: int,
+	path: string,
+} {
+	{ICON_SHIELD, "assets/icons/selected/shield.svg"},
+	{ICON_SWORDS, "assets/icons/selected/crossed-swords.svg"},
+	{ICON_SKULL, "assets/icons/selected/skull-crossed-bones.svg"},
+	{ICON_FIREBALL, "assets/icons/selected/fireball.svg"},
+	{ICON_POTION, "assets/icons/selected/health-potion.svg"},
+}
+
 // Text colors
 COLOR_WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
 COLOR_CYAN :: [4]f32{0.0, 0.9, 1.0, 1.0}
@@ -84,8 +102,8 @@ draw_damage_numbers :: proc(ctx: ^Slug_Context) {
 	for &d in damage_numbers {
 		if !d.active do continue
 
-		t := d.age / DAMAGE_LIFETIME  // normalized lifetime [0, 1]
-		pop := 1.0 - t                // inverse: 1 at spawn, 0 at death
+		t := d.age / DAMAGE_LIFETIME // normalized lifetime [0, 1]
+		pop := 1.0 - t // inverse: 1 at spawn, 0 at death
 		// Quadratic ease-out "pop" effect: numbers start large and shrink,
 		// with a brief overshoot above DAMAGE_START_SIZE at spawn
 		pop_scale := 1.0 + pop * pop * 0.5
@@ -151,6 +169,15 @@ main :: proc() {
 	ctx.font = font
 
 	font_load_ascii(&ctx.font)
+
+	// --- Load SVG icons into font glyph slots 128+ ---
+	icons_loaded := 0
+	for icon_def in ICON_PATHS {
+		if svg_load_into_font(&ctx.font, icon_def.slot, icon_def.path) {
+			icons_loaded += 1
+		}
+	}
+	fmt.printf("Loaded %d SVG icons\n", icons_loaded)
 
 	for gi in 0 ..< MAX_CACHED_GLYPHS {
 		g := &ctx.font.glyphs[gi]
@@ -399,6 +426,24 @@ main :: proc() {
 			total_time * 2.0, // phase (animates the wave)
 			COLOR_PINK,
 		)
+
+		// --- SVG Icons demo ---
+		// Icons rendered through the same Slug pipeline as text — resolution independent!
+		slug_draw_text(ctx, "SVG Icons (vector art via Slug):", 500, 560, 14, COLOR_DIM)
+		icon_y: f32 = 600
+		icon_size: f32 = 48
+		icon_spacing: f32 = 70
+		icon_start_x: f32 = 535
+		icon_colors := [?][4]f32{COLOR_CYAN, COLOR_RED, COLOR_WHITE, COLOR_ORANGE, COLOR_GREEN}
+		icon_labels := [?]string{"Shield", "Swords", "Skull", "Fire", "Potion"}
+		for i in 0 ..< len(ICON_PATHS) {
+			ix := icon_start_x + f32(i) * icon_spacing
+			// Pulsing size effect
+			pulse := 1.0 + math.sin(total_time * 2.0 + f32(i) * 1.2) * 0.1
+			slug_draw_icon(ctx, ICON_PATHS[i].slot, ix, icon_y, icon_size * pulse, icon_colors[i])
+			// Label below
+			slug_draw_text(ctx, icon_labels[i], ix - 16, icon_y + 35, 10, COLOR_DIM)
+		}
 
 		// --- Damage numbers (upper right area) ---
 		draw_damage_numbers(ctx)
