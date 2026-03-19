@@ -75,18 +75,162 @@ shaders/slug.frag        Fragment shader — core Slug algorithm (ray intersecti
 ## Building
 
 ### Prerequisites
-- Odin compiler
-- Vulkan SDK (runtime + validation layers)
-- `glslc` shader compiler (from shaderc or vulkan-tools)
-- SDL3 development libraries
-- stb_truetype (built via `make unix` in Odin's `vendor/stb/`)
-- TrueType fonts (defaults to Liberation Mono/Sans/Serif)
 
-### Build and Run
+You need four things on every platform: the **Odin compiler**, a **Vulkan implementation**, the **glslc** SPIR-V shader compiler, and **SDL3**.
+
+Fonts are bundled in `assets/fonts/` (Liberation Mono, Sans, Serif) — no system font dependencies.
+
+#### Odin Compiler
+
+Install from [odin-lang.org](https://odin-lang.org). Either grab a nightly build or clone and build from source.
+
+After installing, you must build the **stb vendor library** that provides `stb_truetype`:
+
+**Linux / macOS:**
+```sh
+make -C $ODIN_ROOT/vendor/stb/src unix
+```
+
+**Windows (from a Visual Studio Developer Command Prompt):**
+```cmd
+cd %ODIN_ROOT%\vendor\stb\src
+nmake -f Windows.mak
+```
+
+If you skip this step, the build will fail with linker errors about missing `stb_truetype` symbols.
+
+Odin's SDL3 vendor bindings also need the SDL3 shared library present at link time — see platform sections below.
+
+#### glslc (SPIR-V Shader Compiler)
+
+`glslc` compiles the GLSL vertex/fragment shaders (`shaders/slug.vert`, `shaders/slug.frag`) into SPIR-V bytecode that Vulkan can consume. It is part of Google's **shaderc** project. The build scripts call `glslc` before invoking `odin build`, so it must be on your `PATH`.
+
+How to get it varies by platform — see below.
+
+---
+
+### Linux (Arch)
+
+```sh
+sudo pacman -S vulkan-devel shaderc sdl3
+```
+
+`vulkan-devel` pulls in the Vulkan loader, headers, and validation layers. `shaderc` provides `glslc`. `sdl3` provides the shared library that Odin's vendor bindings link against.
+
+Build the stb vendor lib (if not already done):
+```sh
+make -C $(odin root)/vendor/stb/src unix
+```
+
+Build and run:
 ```sh
 bash build.sh
 ./slugvibes
 ```
+
+### Linux (Ubuntu / Debian)
+
+```sh
+sudo apt install vulkan-tools vulkan-validationlayers libvulkan-dev \
+                 glslc libsdl3-dev
+```
+
+On older Ubuntu releases, `glslc` may not be packaged separately — install `shaderc` or grab `glslc` from the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+
+Build the stb vendor lib:
+```sh
+make -C $(odin root)/vendor/stb/src unix
+```
+
+Build and run:
+```sh
+bash build.sh
+./slugvibes
+```
+
+### Windows
+
+1. **Vulkan SDK** — Download and install from [vulkan.lunarg.com](https://vulkan.lunarg.com/sdk/home). The SDK includes `glslc.exe`, the Vulkan loader, and validation layers. Make sure the SDK `Bin` directory is on your `PATH` (the installer usually does this).
+
+2. **SDL3** — Download the SDL3 runtime DLL from [libsdl.org](https://libsdl.org). Place `SDL3.dll` somewhere on your `PATH` or in the project directory. You also need the development library (import lib) for linking — Odin's vendor bindings expect it.
+
+3. **Odin** — Install from [odin-lang.org](https://odin-lang.org). Build the stb vendor lib from a **Developer Command Prompt**:
+   ```cmd
+   cd %ODIN_ROOT%\vendor\stb\src
+   nmake -f Windows.mak
+   ```
+
+Build and run (cmd):
+```cmd
+build.bat
+slugvibes.exe
+```
+
+Build and run (PowerShell):
+```powershell
+.\build.ps1
+.\slugvibes.exe
+```
+
+### macOS (Untested)
+
+macOS does not have native Vulkan — it would run through **MoltenVK** (Vulkan-on-Metal translation layer). This project has not been tested on macOS, but in principle:
+
+```sh
+brew install molten-vk shaderc sdl3
+```
+
+You may also need the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/sdk/home) for validation layers and the ICD.
+
+Build the stb vendor lib:
+```sh
+make -C $(odin root)/vendor/stb/src unix
+```
+
+Build and run:
+```sh
+bash build.sh
+./slugvibes
+```
+
+If you get it working on macOS, contributions are welcome.
+
+---
+
+### Important: Run from the Project Root
+
+The program loads fonts from `assets/fonts/` using relative paths. You must run the binary from the project root directory (where `assets/` lives), not from inside a subdirectory.
+
+---
+
+### Troubleshooting
+
+**`glslc: command not found`**
+- **Linux (Arch):** `sudo pacman -S shaderc`
+- **Linux (Ubuntu/Debian):** `sudo apt install glslc` or `sudo apt install shaderc`
+- **Windows:** Install the Vulkan SDK from LunarG and ensure its `Bin` directory is on your `PATH`
+- **macOS:** `brew install shaderc`
+
+**Linker errors mentioning `stb_truetype` / `stbi_` symbols**
+- You need to build the stb vendor library first. See the Odin setup section above. This is the most common first-build issue.
+
+**`SDL3` not found / linker errors about SDL**
+- **Linux:** Install `sdl3` (Arch) or `libsdl3-dev` (Ubuntu/Debian)
+- **Windows:** Download SDL3 development libraries and ensure the import lib and DLL are findable
+- Check that Odin's `vendor/sdl3` bindings match your installed SDL3 version
+
+**Vulkan validation layer not found (`VK_LAYER_KHRONOS_validation`)**
+- **Linux (Arch):** This is included in `vulkan-devel`. If you installed only `vulkan-icd-loader`, add `vulkan-validation-layers`.
+- **Linux (Ubuntu/Debian):** `sudo apt install vulkan-validationlayers`
+- **Windows:** Reinstall the Vulkan SDK with validation layers selected (they are included by default)
+- The program will still run without validation layers, but you lose helpful debug messages.
+
+**`Failed to create Vulkan instance` / no Vulkan driver**
+- Ensure you have a Vulkan-capable GPU driver installed. On Linux, this means `mesa-vulkan` (AMD/Intel) or the proprietary NVIDIA driver. On Windows, update your GPU drivers.
+
+**Window opens but text is garbled or missing**
+- Check that `shaders/slug_vert.spv` and `shaders/slug_frag.spv` exist — the build script should have created them. If you edited shaders, re-run the build script to recompile them.
+- Verify fonts exist at `assets/fonts/LiberationMono-Regular.ttf` (and Sans/Serif).
 
 ### Controls
 | Input | Action |
@@ -112,7 +256,6 @@ The HLSL→GLSL shader port was done mechanically from Eric Lengyel's publicly a
 - **Text wrapping** — automatic line breaking using `measure_text()`
 
 ### Technical Improvements
-- **Swapchain recreation** — handle window resize properly
 - **Subpixel rendering** — evaluate coverage per RGB subpixel for LCD-quality antialiasing
 - **GPU compute preprocessing** — move band generation and curve sorting to compute shaders
 - **Text shaping** — integrate HarfBuzz for complex scripts (Arabic, Devanagari, etc.)

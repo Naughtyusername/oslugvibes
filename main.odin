@@ -15,9 +15,9 @@ WINDOW_TITLE :: "SlugVibes — GPU Text Rendering"
 INITIAL_WIDTH :: 1280
 INITIAL_HEIGHT :: 720
 
-FONT_PATH :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
-FONT_PATH_SANS :: "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
-FONT_PATH_SERIF :: "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+FONT_PATH :: "assets/fonts/LiberationMono-Regular.ttf"
+FONT_PATH_SANS :: "assets/fonts/LiberationSans-Regular.ttf"
+FONT_PATH_SERIF :: "assets/fonts/LiberationSerif-Regular.ttf"
 
 // Text colors
 COLOR_WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}

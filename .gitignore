@@ -18,3 +18,8 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# game-icons.net bulk SVG archive (keep only assets/icons/selected/)
+assets/icons/ffffff/
+assets/icons/license.txt
+assets/game-icons.net.svg.zip
