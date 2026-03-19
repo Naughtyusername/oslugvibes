@@ -15,7 +15,8 @@ Slug renders resolution-independent text by evaluating quadratic Bézier curves 
 | `slug_renderer.odin` | Full Vulkan init (SDL3 surface), pipeline, multi-font descriptor sets, vertex emission, per-font draw calls |
 | `text_effects.odin` | Per-character effects: rainbow, wobble, shake, rotation, circular path, sine wave path |
 | `vulkan_helpers.odin` | Buffer creation, texture upload, image layout transitions, shader module loading |
-| `main.odin` | Entry point, demo scenes, damage numbers, combat log, event loop |
+| `svg_parser.odin` | SVG path parser — loads single-path SVG icons into font glyph slots for rendering through the same pipeline as text |
+| `main.odin` | Entry point, demo scenes, damage numbers, combat log, SVG icon demo, event loop |
 | `shaders/slug.vert` | GLSL 4.50 vertex shader — dynamic dilation, data unpacking |
 | `shaders/slug.frag` | GLSL 4.50 fragment shader — core Slug algorithm (ray-curve intersection, winding number, coverage) |
 
@@ -31,6 +32,8 @@ Slug renders resolution-independent text by evaluating quadratic Bézier curves 
 - **Multi-font**: Up to 4 font slots, each with own textures + descriptor set. Per-font draw calls.
 - **Kerning**: `stbtt.GetGlyphKernAdvance` applied between character pairs in `slug_draw_text`
 - **Cubic curves**: Recursive De Casteljau subdivision with 0.001 em tolerance, max depth 8
+- **SVG icons**: Parsed from `<path d="...">`, normalized to em-space, placed into font glyph slots 128+ for unified rendering
+- **Bundled assets**: Fonts in `assets/fonts/`, SVG icons in `assets/icons/selected/` — no system dependencies
 
 ## Build
 

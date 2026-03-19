@@ -43,6 +43,11 @@ This implementation references Lengyel's public HLSL/GLSL shader code and the Sl
 - **Wave text** — glyphs following a sine wave path, rotated to match the tangent
 - **Text measurement** — `measure_text()` returns width/height without drawing
 
+### SVG Vector Icons
+- **SVG path parser** — loads single-path SVGs (like game-icons.net) through the same Slug pipeline as text
+- **Resolution-independent icons** — swords, shields, skulls, potions rendered as Bézier curves, perfect at any zoom
+- **Unified rendering** — icons share the exact same GPU textures, shaders, and draw calls as text glyphs
+
 ### Game UI Demos
 - **Damage numbers** — floating combat text that pops large, shrinks, and fades as it rises
 - **Scrolling combat log** — color-coded RPG-style messages with age-based fade
@@ -51,7 +56,8 @@ This implementation references Lengyel's public HLSL/GLSL shader code and the Sl
 ## Architecture
 
 ```
-main.odin               Entry point, event loop, demo scenes, damage numbers
+main.odin               Entry point, event loop, demo scenes, damage numbers, SVG icons
+svg_parser.odin          SVG path parser — loads vector icons into the Slug pipeline
 slug_types.odin          All shared types (vertex format, glyph data, Vulkan context, font slots)
 ttf_parser.odin          Font loading via stb_truetype, kerning, cubic-to-quadratic conversion
 glyph_processor.odin     Band generation, curve sorting, texture packing, f32→f16
@@ -282,3 +288,7 @@ The HLSL→GLSL shader port was done mechanically from Eric Lengyel's publicly a
 ## License
 
 Public domain / unlicense. The Slug algorithm itself is now public domain. This implementation is released without restriction.
+
+### Bundled Asset Licenses
+- **Liberation fonts** (Mono, Sans, Serif) — SIL Open Font License 1.1. Free to use, redistribute, and modify.
+- **game-icons.net SVG icons** — CC BY 3.0. See `assets/icons/selected/license.txt` for attribution.
