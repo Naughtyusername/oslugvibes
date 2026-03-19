@@ -388,7 +388,13 @@ main :: proc() {
 		slug_draw_text(ctx, zoom_text, 30, 692, 14, COLOR_DIM)
 		slug_draw_text(ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 708, 12, COLOR_DIM)
 
-		// --- Multi-font demo ---
+		// --- Multi-font kerning comparison ---
+		// Mono comparison first (still on font 0, before we switch away)
+		slug_draw_text(ctx, "Liberation Mono (monospace, no kerning)", 30, y_pos, 16, COLOR_DIM)
+		y_pos += 22
+		slug_draw_text(ctx, "AV WA To LT VA — no kerning", 30, y_pos, 28, COLOR_DIM)
+		y_pos += 40
+
 		// Liberation Sans (proportional, has kerning)
 		slug_use_font(ctx, 1)
 		slug_draw_text(ctx, "Liberation Sans (proportional)", 30, y_pos, 16, COLOR_DIM)
@@ -405,13 +411,6 @@ main :: proc() {
 		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
 		y_pos += 34
 		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_YELLOW)
-		y_pos += 40
-
-		// Back to mono for comparison
-		slug_use_font(ctx, 0)
-		slug_draw_text(ctx, "Liberation Mono (monospace, no kerning)", 30, y_pos, 16, COLOR_DIM)
-		y_pos += 22
-		slug_draw_text(ctx, "AV WA To LT VA — no kerning", 30, y_pos, 28, COLOR_DIM)
 
 		slug_end(ctx)
 
