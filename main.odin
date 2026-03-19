@@ -17,13 +17,6 @@ INITIAL_HEIGHT :: 720
 
 FONT_PATH :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
 
-// Demo text samples
-DEMO_TEXT       :: "The quick brown fox jumps over the lazy dog"
-DEMO_TEXT_UPPER :: "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789"
-DEMO_TEXT_LOWER :: "abcdefghijklmnopqrstuvwxyz !@#$%^&*()"
-DEMO_TEXT_SLUG  :: "SlugVibes — GPU Bezier Text"
-DEMO_TEXT_RES   :: "Resolution Independent!"
-
 // Text colors
 COLOR_WHITE  :: [4]f32{1.0, 1.0, 1.0, 1.0}
 COLOR_CYAN   :: [4]f32{0.0, 0.9, 1.0, 1.0}
@@ -32,21 +25,21 @@ COLOR_GREEN  :: [4]f32{0.3, 1.0, 0.4, 1.0}
 COLOR_PINK   :: [4]f32{1.0, 0.4, 0.7, 1.0}
 COLOR_RED    :: [4]f32{1.0, 0.2, 0.1, 1.0}
 COLOR_ORANGE :: [4]f32{1.0, 0.6, 0.1, 1.0}
+COLOR_DIM    :: [4]f32{0.5, 0.5, 0.5, 0.7}
 
 // Zoom limits
 ZOOM_MIN     :: f32(0.1)
 ZOOM_MAX     :: f32(50.0)
-ZOOM_SPEED   :: f32(1.15)  // Multiplicative per scroll tick
-PAN_SPEED    :: f32(5.0)
+ZOOM_SPEED   :: f32(1.15)
 
 // --- Damage number system ---
 
 MAX_DAMAGE_NUMBERS :: 64
-DAMAGE_LIFETIME    :: f32(1.5)   // Seconds before fully faded
-DAMAGE_RISE_SPEED  :: f32(80.0)  // Pixels/sec upward
-DAMAGE_START_SIZE  :: f32(48.0)  // Initial font size
-DAMAGE_END_SIZE    :: f32(16.0)  // Final font size
-DAMAGE_SPAWN_RATE  :: f32(0.4)   // Seconds between auto-spawns
+DAMAGE_LIFETIME    :: f32(1.5)
+DAMAGE_RISE_SPEED  :: f32(80.0)
+DAMAGE_START_SIZE  :: f32(48.0)
+DAMAGE_END_SIZE    :: f32(16.0)
+DAMAGE_SPAWN_RATE  :: f32(0.4)
 
 Damage_Number :: struct {
 	x, y:      f32,
@@ -89,20 +82,16 @@ draw_damage_numbers :: proc(ctx: ^Slug_Context) {
 	for &d in damage_numbers {
 		if !d.active do continue
 
-		t := d.age / DAMAGE_LIFETIME  // 0..1 over lifetime
-
-		// Size: starts big, shrinks. Use ease-out curve for "pop" feel.
+		t := d.age / DAMAGE_LIFETIME
 		pop := 1.0 - t
-		pop_scale := 1.0 + pop * pop * 0.5  // Extra 50% size at birth, decays
+		pop_scale := 1.0 + pop * pop * 0.5
 		size := math.lerp(DAMAGE_END_SIZE, DAMAGE_START_SIZE, pop) * pop_scale
 
-		// Alpha: fully opaque for first 60%, then fade out
 		alpha: f32 = 1.0
 		if t > 0.6 {
 			alpha = 1.0 - (t - 0.6) / 0.4
 		}
 
-		// Color: white-hot at spawn, red as it fades
 		color := [4]f32{
 			1.0,
 			math.lerp(f32(0.2), f32(1.0), pop),
@@ -110,11 +99,15 @@ draw_damage_numbers :: proc(ctx: ^Slug_Context) {
 			alpha,
 		}
 
-		// Format number as string
 		text := fmt.bprintf(buf[:], "%d", d.value)
 		slug_draw_text(ctx, text, d.x, d.y, size, color)
 	}
 }
+
+// --- Combat log auto-message timer ---
+
+LOG_MESSAGE_RATE :: f32(0.8)  // seconds between auto messages
+log_message_timer: f32
 
 main :: proc() {
 	// --- SDL3 init ---
@@ -148,7 +141,6 @@ main :: proc() {
 	}
 	ctx.font = font
 
-	// Load ASCII glyphs and process them
 	font_load_ascii(&ctx.font)
 
 	for gi in 0..<MAX_CACHED_GLYPHS {
@@ -158,7 +150,6 @@ main :: proc() {
 		}
 	}
 
-	// Pack glyph data into GPU textures
 	pack := pack_glyph_textures(&ctx.font)
 	defer pack_result_destroy(&pack)
 
@@ -174,15 +165,20 @@ main :: proc() {
 	fmt.println("  Space: spawn damage number")
 	fmt.println("  ESC: quit")
 
+	// --- Combat log ---
+	combat_log: Combat_Log
+	combat_log_add(&combat_log, "Welcome to SlugVibes!", COLOR_CYAN)
+	combat_log_add(&combat_log, "GPU Bezier text rendering demo.", COLOR_GREEN)
+
 	// --- Main loop state ---
 	running := true
 	frame_count: u64
 	last_time := time.now()
 	middle_dragging := false
 	last_mouse_x, last_mouse_y: f32
+	mouse_x, mouse_y: f32
 
 	for running {
-		// Poll events
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
@@ -194,11 +190,9 @@ main :: proc() {
 				if key == sdl.K_ESCAPE {
 					running = false
 				} else if key == sdl.K_R {
-					// Reset zoom/pan
 					ctx.zoom = 1.0
 					ctx.pan = {0, 0}
 				} else if key == sdl.K_SPACE {
-					// Manual damage number spawn
 					spawn_damage_number(
 						rand.float32_range(100, 800),
 						rand.float32_range(200, 500),
@@ -207,7 +201,6 @@ main :: proc() {
 				}
 
 			case .MOUSE_WHEEL:
-				// Zoom in/out
 				scroll := event.wheel.y
 				if scroll > 0 {
 					ctx.zoom = min(ctx.zoom * ZOOM_SPEED, ZOOM_MAX)
@@ -216,7 +209,7 @@ main :: proc() {
 				}
 
 			case .MOUSE_BUTTON_DOWN:
-				if event.button.button == 2 {  // Middle mouse
+				if event.button.button == 2 {
 					middle_dragging = true
 					last_mouse_x = event.button.x
 					last_mouse_y = event.button.y
@@ -228,18 +221,18 @@ main :: proc() {
 				}
 
 			case .MOUSE_MOTION:
+				mouse_x = event.motion.x
+				mouse_y = event.motion.y
 				if middle_dragging {
 					dx := event.motion.x - last_mouse_x
 					dy := event.motion.y - last_mouse_y
 					last_mouse_x = event.motion.x
 					last_mouse_y = event.motion.y
-					// Pan in screen space (divide by zoom so pan feels consistent)
 					ctx.pan.x += dx / ctx.zoom
 					ctx.pan.y += dy / ctx.zoom
 				}
 
 			case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-				// TODO: recreate swapchain on resize
 				break
 			}
 		}
@@ -250,60 +243,131 @@ main :: proc() {
 		last_time = now
 		if dt > 0.05 do dt = 0.05
 
-		// Auto-spawn damage numbers periodically
+		t := f32(frame_count) * 0.02
+		total_time := f32(frame_count) / 60.0  // approximate seconds
+
+		// Auto-spawn damage numbers
 		damage_spawn_timer += dt
 		if damage_spawn_timer >= DAMAGE_SPAWN_RATE {
 			damage_spawn_timer -= DAMAGE_SPAWN_RATE
 			spawn_damage_number(
-				rand.float32_range(200, 1000),
-				rand.float32_range(400, 600),
+				rand.float32_range(750, 1100),
+				rand.float32_range(80, 200),
 				int(rand.int31_max(999)) + 1,
 			)
 		}
-
 		update_damage_numbers(dt)
 
-		// --- Build text geometry ---
+		// Auto-add combat log messages
+		log_message_timer += dt
+		if log_message_timer >= LOG_MESSAGE_RATE {
+			log_message_timer -= LOG_MESSAGE_RATE
+			msg_idx := int(rand.int31_max(i32(len(combat_log_messages))))
+			buf: [128]u8
+			msg := combat_log_messages[msg_idx]
+			// Format with random number if message has %d
+			text := fmt.bprintf(buf[:], msg, int(rand.int31_max(99)) + 1)
+			combat_log_add(&combat_log, text, combat_log_colors[msg_idx])
+		}
+		combat_log_update(&combat_log, dt)
+
+		// ===================================================
+		// BUILD TEXT GEOMETRY
+		// ===================================================
 		slug_begin(&ctx)
 
-		// Animated Y offset for visual interest
-		t := f32(frame_count) * 0.02
-		wave := math.sin(t) * 10.0
+		// --- Left column: Static text demos ---
+		y_pos: f32 = 40
 
-		// Multiple text samples at different sizes
-		y_pos: f32 = 50
+		// Title with wobble
+		draw_text_wobble(&ctx, "SlugVibes", 30, y_pos, 42, total_time, 8.0, 4.0, 0.8)
+		y_pos += 60
 
-		slug_draw_text(&ctx, DEMO_TEXT_SLUG, 30, y_pos + wave, 48, COLOR_CYAN)
-		y_pos += 70
+		// Standard text samples
+		slug_draw_text(&ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
+		y_pos += 36
 
-		slug_draw_text(&ctx, DEMO_TEXT, 30, y_pos, 32, COLOR_WHITE)
-		y_pos += 50
+		// Rainbow cycling text
+		draw_text_rainbow(&ctx, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", 30, y_pos, 20, total_time, 200.0, 15.0)
+		y_pos += 30
 
-		slug_draw_text(&ctx, DEMO_TEXT_UPPER, 30, y_pos, 24, COLOR_YELLOW)
+		// Shaking text
+		draw_text_shake(&ctx, "CRITICAL HIT!", 30, y_pos, 28, 3.0, total_time * 30.0)
 		y_pos += 40
 
-		slug_draw_text(&ctx, DEMO_TEXT_LOWER, 30, y_pos, 24, COLOR_GREEN)
-		y_pos += 50
-
-		// Size ramp: same text at multiple sizes to show scaling
-		sizes := [?]f32{12, 16, 20, 28, 36, 48}
+		// Size ramp
+		sizes := [?]f32{10, 14, 18, 24, 32}
 		for size in sizes {
 			slug_draw_text(&ctx, "Slug", 30, y_pos, size, COLOR_PINK)
-			y_pos += size + 8
+			y_pos += size + 6
 		}
 
-		// Resolution independence demo text
-		y_pos += 20
-		slug_draw_text(&ctx, DEMO_TEXT_RES, 30, y_pos, 36, COLOR_ORANGE)
-		y_pos += 50
+		// --- Rotating text ---
+		// Slowly spinning text in the upper-right area
+		draw_text_rotated(
+			&ctx,
+			"Resolution Independent!",
+			900, 120,
+			22,
+			total_time * 0.5,  // radians, slow spin
+			COLOR_ORANGE,
+		)
 
-		// Zoom level indicator
+		// Second rotating text, opposite direction
+		draw_text_rotated(
+			&ctx,
+			"* GPU Bezier Curves *",
+			900, 120,
+			16,
+			-total_time * 0.3,
+			COLOR_CYAN,
+		)
+
+		// --- Text on a circle ---
+		draw_text_on_circle(
+			&ctx,
+			"  Slug Patent Now Public Domain!  ",
+			640, 420,
+			150,                    // radius
+			-total_time * 0.4,      // rotating start angle
+			18,
+			COLOR_YELLOW,
+		)
+
+		// Inner circle, opposite direction
+		draw_text_on_circle(
+			&ctx,
+			"  Odin + Vulkan + SDL3  ",
+			640, 420,
+			100,
+			total_time * 0.6,
+			14,
+			COLOR_GREEN,
+		)
+
+		// --- Text on a sine wave ---
+		draw_text_on_wave(
+			&ctx,
+			"waves of text flowing smoothly",
+			30, 650,
+			18,
+			25.0,                   // amplitude
+			300.0,                  // wavelength
+			total_time * 2.0,       // phase (animates the wave)
+			COLOR_PINK,
+		)
+
+		// --- Damage numbers (upper right area) ---
+		draw_damage_numbers(&ctx)
+
+		// --- Combat log (right side) ---
+		combat_log_draw(&ctx, &combat_log, 850, 300, 300)
+
+		// --- HUD info ---
 		zoom_buf: [32]u8
 		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
-		slug_draw_text(&ctx, zoom_text, 30, y_pos, 18, COLOR_GREEN)
-
-		// Damage numbers on top
-		draw_damage_numbers(&ctx)
+		slug_draw_text(&ctx, zoom_text, 30, 700, 14, COLOR_DIM)
+		slug_draw_text(&ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 716, 12, COLOR_DIM)
 
 		slug_end(&ctx)
 
@@ -316,7 +380,6 @@ main :: proc() {
 		frame_count += 1
 	}
 
-	// Wait for GPU to finish before cleanup
 	if ctx.device != nil {
 		vk.DeviceWaitIdle(ctx.device)
 	}
