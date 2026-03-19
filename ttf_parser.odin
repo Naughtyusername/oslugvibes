@@ -30,16 +30,23 @@ font_load :: proc(path: string) -> (font: Font, ok: bool) {
 	ascent_raw, descent_raw, line_gap_raw: c.int
 	stbtt.GetFontVMetrics(info, &ascent_raw, &descent_raw, &line_gap_raw)
 
-	// Calculate em scale: we normalize everything to em-space [0, ~1]
-	// units_per_em = ascent - descent (approximately)
+	// Normalize all coordinates to em-space where the full ascent-to-descent
+	// range is ~1.0. This keeps curve control points in a consistent range
+	// regardless of the font's internal units (typically 1000 or 2048 per em).
+	// The font_size parameter at draw time scales em-space back to pixels.
 	units_per_em := f32(ascent_raw - descent_raw)
 	font.em_scale = 1.0 / units_per_em
 	font.ascent = f32(ascent_raw) * font.em_scale
 	font.descent = f32(descent_raw) * font.em_scale
 	font.line_gap = f32(line_gap_raw) * font.em_scale
 
-	fmt.printf("Font loaded: ascent=%.3f descent=%.3f line_gap=%.3f em_scale=%.6f\n",
-		font.ascent, font.descent, font.line_gap, font.em_scale)
+	fmt.printf(
+		"Font loaded: ascent=%.3f descent=%.3f line_gap=%.3f em_scale=%.6f\n",
+		font.ascent,
+		font.descent,
+		font.line_gap,
+		font.em_scale,
+	)
 
 	return font, true
 }
@@ -67,7 +74,7 @@ font_load_glyph :: proc(font: ^Font, codepoint: rune) -> bool {
 	if idx < 0 || idx >= MAX_CACHED_GLYPHS do return false
 
 	g := &font.glyphs[idx]
-	if g.valid do return true  // Already loaded
+	if g.valid do return true // Already loaded
 
 	info := &font.info
 
@@ -110,12 +117,14 @@ font_load_glyph :: proc(font: ^Font, codepoint: rune) -> bool {
 	defer stbtt.FreeShape(info, vertices)
 
 	// Convert stb_truetype vertices to our Bezier_Curve format.
-	// stb_truetype gives us: vmove (start contour), vline, vcurve (quadratic), vcubic (skip)
-	// We need all curves to be quadratic Bezier curves.
+	// stb_truetype gives us: vmove (start contour), vline, vcurve (quadratic), vcubic.
+	// The Slug fragment shader only handles quadratic Beziers, so:
+	//   - Lines are promoted to degenerate quadratics (control point at midpoint)
+	//   - Cubics are recursively subdivided into quadratic approximations
 
 	// stb_truetype vertex type constants (byte values)
-	STBTT_VMOVE  :: 1
-	STBTT_VLINE  :: 2
+	STBTT_VMOVE :: 1
+	STBTT_VLINE :: 2
 	STBTT_VCURVE :: 3
 	STBTT_VCUBIC :: 4
 

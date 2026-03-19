@@ -48,5 +48,5 @@ This is a vibe-code project — Claude can write code directly (not teaching mod
 - Vulkan ortho projection: `matrix_ortho3d_f32(0, w, 0, h, ...)` NOT `(0, w, h, 0, ...)` — Vulkan Y-down means bottom < top or everything renders upside-down
 - `Slug_Context` is ~340KB on the stack due to font arrays (triggers compiler warning, works fine)
 - `emit_glyph_quad` and `emit_glyph_quad_transformed` must NOT be `@(private="file")` — used by `text_effects.odin`
-- No swapchain recreation on window resize yet
+- Swapchain recreation on resize is implemented (tracks `framebuffer_resized` flag + handles `OUT_OF_DATE` / `SUBOPTIMAL`)
 - Monospace fonts have zero kerning by definition — test kerning with proportional fonts

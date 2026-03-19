@@ -11,43 +11,43 @@ import vk "vendor:vulkan"
 // Entry point — SDL3 window + Slug text rendering demo
 // ===================================================
 
-WINDOW_TITLE   :: "SlugVibes — GPU Text Rendering"
-INITIAL_WIDTH  :: 1280
+WINDOW_TITLE :: "SlugVibes — GPU Text Rendering"
+INITIAL_WIDTH :: 1280
 INITIAL_HEIGHT :: 720
 
-FONT_PATH       :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
-FONT_PATH_SANS  :: "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+FONT_PATH :: "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"
+FONT_PATH_SANS :: "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
 FONT_PATH_SERIF :: "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
 
 // Text colors
-COLOR_WHITE  :: [4]f32{1.0, 1.0, 1.0, 1.0}
-COLOR_CYAN   :: [4]f32{0.0, 0.9, 1.0, 1.0}
+COLOR_WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
+COLOR_CYAN :: [4]f32{0.0, 0.9, 1.0, 1.0}
 COLOR_YELLOW :: [4]f32{1.0, 0.9, 0.2, 1.0}
-COLOR_GREEN  :: [4]f32{0.3, 1.0, 0.4, 1.0}
-COLOR_PINK   :: [4]f32{1.0, 0.4, 0.7, 1.0}
-COLOR_RED    :: [4]f32{1.0, 0.2, 0.1, 1.0}
+COLOR_GREEN :: [4]f32{0.3, 1.0, 0.4, 1.0}
+COLOR_PINK :: [4]f32{1.0, 0.4, 0.7, 1.0}
+COLOR_RED :: [4]f32{1.0, 0.2, 0.1, 1.0}
 COLOR_ORANGE :: [4]f32{1.0, 0.6, 0.1, 1.0}
-COLOR_DIM    :: [4]f32{0.5, 0.5, 0.5, 0.7}
+COLOR_DIM :: [4]f32{0.5, 0.5, 0.5, 0.7}
 
 // Zoom limits
-ZOOM_MIN     :: f32(0.1)
-ZOOM_MAX     :: f32(50.0)
-ZOOM_SPEED   :: f32(1.15)
+ZOOM_MIN :: f32(0.1)
+ZOOM_MAX :: f32(50.0)
+ZOOM_SPEED :: f32(1.15)
 
 // --- Damage number system ---
 
 MAX_DAMAGE_NUMBERS :: 64
-DAMAGE_LIFETIME    :: f32(1.5)
-DAMAGE_RISE_SPEED  :: f32(80.0)
-DAMAGE_START_SIZE  :: f32(48.0)
-DAMAGE_END_SIZE    :: f32(16.0)
-DAMAGE_SPAWN_RATE  :: f32(0.4)
+DAMAGE_LIFETIME :: f32(1.5)
+DAMAGE_RISE_SPEED :: f32(80.0)
+DAMAGE_START_SIZE :: f32(48.0)
+DAMAGE_END_SIZE :: f32(16.0)
+DAMAGE_SPAWN_RATE :: f32(0.4)
 
 Damage_Number :: struct {
-	x, y:      f32,
-	age:       f32,
-	value:     int,
-	active:    bool,
+	x, y:   f32,
+	age:    f32,
+	value:  int,
+	active: bool,
 }
 
 damage_numbers: [MAX_DAMAGE_NUMBERS]Damage_Number
@@ -56,7 +56,7 @@ damage_spawn_timer: f32
 spawn_damage_number :: proc(x, y: f32, value: int) {
 	for &d in damage_numbers {
 		if !d.active {
-			d = Damage_Number{
+			d = Damage_Number {
 				x      = x + rand.float32_range(-30, 30),
 				y      = y + rand.float32_range(-10, 10),
 				age    = 0,
@@ -84,17 +84,21 @@ draw_damage_numbers :: proc(ctx: ^Slug_Context) {
 	for &d in damage_numbers {
 		if !d.active do continue
 
-		t := d.age / DAMAGE_LIFETIME
-		pop := 1.0 - t
+		t := d.age / DAMAGE_LIFETIME  // normalized lifetime [0, 1]
+		pop := 1.0 - t                // inverse: 1 at spawn, 0 at death
+		// Quadratic ease-out "pop" effect: numbers start large and shrink,
+		// with a brief overshoot above DAMAGE_START_SIZE at spawn
 		pop_scale := 1.0 + pop * pop * 0.5
 		size := math.lerp(DAMAGE_END_SIZE, DAMAGE_START_SIZE, pop) * pop_scale
 
+		// Fade out over the last 40% of lifetime
 		alpha: f32 = 1.0
 		if t > 0.6 {
 			alpha = 1.0 - (t - 0.6) / 0.4
 		}
 
-		color := [4]f32{
+		// Color shifts from white/yellow at spawn to red at death
+		color := [4]f32 {
 			1.0,
 			math.lerp(f32(0.2), f32(1.0), pop),
 			math.lerp(f32(0.1), f32(0.8), pop * pop),
@@ -108,7 +112,7 @@ draw_damage_numbers :: proc(ctx: ^Slug_Context) {
 
 // --- Combat log auto-message timer ---
 
-LOG_MESSAGE_RATE :: f32(0.8)  // seconds between auto messages
+LOG_MESSAGE_RATE :: f32(0.8) // seconds between auto messages
 log_message_timer: f32
 
 main :: proc() {
@@ -148,7 +152,7 @@ main :: proc() {
 
 	font_load_ascii(&ctx.font)
 
-	for gi in 0..<MAX_CACHED_GLYPHS {
+	for gi in 0 ..< MAX_CACHED_GLYPHS {
 		g := &ctx.font.glyphs[gi]
 		if g.valid && len(g.curves) > 0 {
 			glyph_process(g)
@@ -182,6 +186,7 @@ main :: proc() {
 	// --- Main loop state ---
 	running := true
 	frame_count: u64
+	total_time: f32
 	last_time := time.now()
 	middle_dragging := false
 	last_mouse_x, last_mouse_y: f32
@@ -251,9 +256,7 @@ main :: proc() {
 		dt := f32(time.duration_seconds(time.diff(last_time, now)))
 		last_time = now
 		if dt > 0.05 do dt = 0.05
-
-		t := f32(frame_count) * 0.02
-		total_time := f32(frame_count) / 60.0  // approximate seconds
+		total_time += dt
 
 		// Auto-spawn damage numbers
 		damage_spawn_timer += dt
@@ -293,7 +296,14 @@ main :: proc() {
 		y_pos += 60
 
 		// Original text samples (same as v1)
-		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 32, COLOR_WHITE)
+		slug_draw_text(
+			ctx,
+			"The quick brown fox jumps over the lazy dog",
+			30,
+			y_pos,
+			32,
+			COLOR_WHITE,
+		)
 		y_pos += 50
 
 		slug_draw_text(ctx, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", 30, y_pos, 24, COLOR_YELLOW)
@@ -303,7 +313,16 @@ main :: proc() {
 		y_pos += 40
 
 		// Per-character effects
-		draw_text_rainbow(ctx, "Rainbow cycling per-character", 30, y_pos, 20, total_time, 200.0, 15.0)
+		draw_text_rainbow(
+			ctx,
+			"Rainbow cycling per-character",
+			30,
+			y_pos,
+			20,
+			total_time,
+			200.0,
+			15.0,
+		)
 		y_pos += 30
 
 		draw_text_shake(ctx, "CRITICAL HIT!", 30, y_pos, 28, 3.0, total_time * 30.0)
@@ -326,9 +345,10 @@ main :: proc() {
 		draw_text_rotated(
 			ctx,
 			"Resolution Independent!",
-			900, 120,
+			900,
+			120,
 			22,
-			total_time * 0.5,  // radians, slow spin
+			total_time * 0.5, // radians, slow spin
 			COLOR_ORANGE,
 		)
 
@@ -336,7 +356,8 @@ main :: proc() {
 		draw_text_rotated(
 			ctx,
 			"* GPU Bezier Curves *",
-			900, 120,
+			900,
+			120,
 			16,
 			-total_time * 0.3,
 			COLOR_CYAN,
@@ -346,9 +367,10 @@ main :: proc() {
 		draw_text_on_circle(
 			ctx,
 			"  Slug Patent Now Public Domain!  ",
-			640, 420,
-			150,                    // radius
-			-total_time * 0.4,      // rotating start angle
+			640,
+			420,
+			150, // radius
+			-total_time * 0.4, // rotating start angle
 			18,
 			COLOR_YELLOW,
 		)
@@ -357,7 +379,8 @@ main :: proc() {
 		draw_text_on_circle(
 			ctx,
 			"  Odin + Vulkan + SDL3  ",
-			640, 420,
+			640,
+			420,
 			100,
 			total_time * 0.6,
 			14,
@@ -368,11 +391,12 @@ main :: proc() {
 		draw_text_on_wave(
 			ctx,
 			"waves of text flowing smoothly",
-			30, 680,
+			30,
+			680,
 			18,
-			20.0,                   // amplitude
-			300.0,                  // wavelength
-			total_time * 2.0,       // phase (animates the wave)
+			20.0, // amplitude
+			300.0, // wavelength
+			total_time * 2.0, // phase (animates the wave)
 			COLOR_PINK,
 		)
 
@@ -386,7 +410,14 @@ main :: proc() {
 		zoom_buf: [32]u8
 		zoom_text := fmt.bprintf(zoom_buf[:], "Zoom: %.1fx", ctx.zoom)
 		slug_draw_text(ctx, zoom_text, 30, 692, 14, COLOR_DIM)
-		slug_draw_text(ctx, "Scroll: zoom | MMB: pan | R: reset | Space: hit!", 30, 708, 12, COLOR_DIM)
+		slug_draw_text(
+			ctx,
+			"Scroll: zoom | MMB: pan | R: reset | Space: hit!",
+			30,
+			708,
+			12,
+			COLOR_DIM,
+		)
 
 		// --- Multi-font kerning comparison ---
 		// Mono comparison first (still on font 0, before we switch away)
@@ -399,7 +430,14 @@ main :: proc() {
 		slug_use_font(ctx, 1)
 		slug_draw_text(ctx, "Liberation Sans (proportional)", 30, y_pos, 16, COLOR_DIM)
 		y_pos += 22
-		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
+		slug_draw_text(
+			ctx,
+			"The quick brown fox jumps over the lazy dog",
+			30,
+			y_pos,
+			24,
+			COLOR_WHITE,
+		)
 		y_pos += 34
 		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_CYAN)
 		y_pos += 40
@@ -408,7 +446,14 @@ main :: proc() {
 		slug_use_font(ctx, 2)
 		slug_draw_text(ctx, "Liberation Serif", 30, y_pos, 16, COLOR_DIM)
 		y_pos += 22
-		slug_draw_text(ctx, "The quick brown fox jumps over the lazy dog", 30, y_pos, 24, COLOR_WHITE)
+		slug_draw_text(
+			ctx,
+			"The quick brown fox jumps over the lazy dog",
+			30,
+			y_pos,
+			24,
+			COLOR_WHITE,
+		)
 		y_pos += 34
 		slug_draw_text(ctx, "AV WA To LT VA — kerned pairs", 30, y_pos, 28, COLOR_YELLOW)
 

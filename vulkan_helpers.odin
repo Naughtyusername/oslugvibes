@@ -18,14 +18,17 @@ find_memory_type :: proc(
 	ctx: ^Slug_Context,
 	type_filter: u32,
 	properties: vk.MemoryPropertyFlags,
-) -> (u32, bool) {
+) -> (
+	u32,
+	bool,
+) {
 	mem_properties: vk.PhysicalDeviceMemoryProperties
 	vk.GetPhysicalDeviceMemoryProperties(ctx.physical_device, &mem_properties)
 
-	for i in 0..<mem_properties.memoryTypeCount {
+	for i in 0 ..< mem_properties.memoryTypeCount {
 		type_bit := u32(1) << i
 		has_type := (type_filter & type_bit) != 0
-		has_props := properties <= mem_properties.memoryTypes[i].propertyFlags
+		has_props := properties <= mem_properties.memoryTypes[i].propertyFlags // Odin bit_set subset check: all requested flags present
 		if has_type && has_props {
 			return i, true
 		}
@@ -41,7 +44,11 @@ create_buffer :: proc(
 	size: vk.DeviceSize,
 	usage: vk.BufferUsageFlags,
 	properties: vk.MemoryPropertyFlags,
-) -> (buffer: vk.Buffer, memory: vk.DeviceMemory, ok: bool) {
+) -> (
+	buffer: vk.Buffer,
+	memory: vk.DeviceMemory,
+	ok: bool,
+) {
 	buf_info := vk.BufferCreateInfo {
 		sType       = .BUFFER_CREATE_INFO,
 		size        = size,
@@ -129,18 +136,18 @@ transition_image_layout :: proc(
 	cmd := begin_one_shot_commands(ctx)
 
 	barrier := vk.ImageMemoryBarrier {
-		sType               = .IMAGE_MEMORY_BARRIER,
-		oldLayout           = old_layout,
-		newLayout           = new_layout,
+		sType = .IMAGE_MEMORY_BARRIER,
+		oldLayout = old_layout,
+		newLayout = new_layout,
 		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
 		dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-		image               = image,
-		subresourceRange    = {
-			aspectMask     = {.COLOR},
-			baseMipLevel   = 0,
-			levelCount     = 1,
+		image = image,
+		subresourceRange = {
+			aspectMask = {.COLOR},
+			baseMipLevel = 0,
+			levelCount = 1,
 			baseArrayLayer = 0,
-			layerCount     = 1,
+			layerCount = 1,
 		},
 	}
 
@@ -171,14 +178,18 @@ gpu_texture_create :: proc(
 	format: vk.Format,
 	data: rawptr,
 	data_size: int,
-) -> (tex: GPU_Texture, ok: bool) {
+) -> (
+	tex: GPU_Texture,
+	ok: bool,
+) {
 	tex.width = width
 	tex.height = height
 	image_size := vk.DeviceSize(data_size)
 
 	// Create staging buffer
 	staging_buf, staging_mem, staging_ok := create_buffer(
-		ctx, image_size,
+		ctx,
+		image_size,
 		{.TRANSFER_SRC},
 		{.HOST_VISIBLE, .HOST_COHERENT},
 	)
@@ -217,7 +228,11 @@ gpu_texture_create :: proc(
 	mem_requirements: vk.MemoryRequirements
 	vk.GetImageMemoryRequirements(ctx.device, tex.image, &mem_requirements)
 
-	mem_type, mem_type_ok := find_memory_type(ctx, mem_requirements.memoryTypeBits, {.DEVICE_LOCAL})
+	mem_type, mem_type_ok := find_memory_type(
+		ctx,
+		mem_requirements.memoryTypeBits,
+		{.DEVICE_LOCAL},
+	)
 	if !mem_type_ok {
 		fmt.eprintln("Failed to find memory type for image")
 		vk.DestroyImage(ctx.device, tex.image, nil)
@@ -246,10 +261,7 @@ gpu_texture_create :: proc(
 	{
 		cmd := begin_one_shot_commands(ctx)
 		region := vk.BufferImageCopy {
-			imageSubresource = {
-				aspectMask = {.COLOR},
-				layerCount = 1,
-			},
+			imageSubresource = {aspectMask = {.COLOR}, layerCount = 1},
 			imageExtent = {width, height, 1},
 		}
 		vk.CmdCopyBufferToImage(cmd, staging_buf, tex.image, .TRANSFER_DST_OPTIMAL, 1, &region)
@@ -260,16 +272,16 @@ gpu_texture_create :: proc(
 
 	// Create image view
 	view_info := vk.ImageViewCreateInfo {
-		sType    = .IMAGE_VIEW_CREATE_INFO,
-		image    = tex.image,
+		sType = .IMAGE_VIEW_CREATE_INFO,
+		image = tex.image,
 		viewType = .D2,
-		format   = format,
+		format = format,
 		subresourceRange = {
-			aspectMask     = {.COLOR},
-			baseMipLevel   = 0,
-			levelCount     = 1,
+			aspectMask = {.COLOR},
+			baseMipLevel = 0,
+			levelCount = 1,
 			baseArrayLayer = 0,
-			layerCount     = 1,
+			layerCount = 1,
 		},
 	}
 
@@ -304,9 +316,9 @@ gpu_texture_create :: proc(
 
 gpu_texture_destroy :: proc(ctx: ^Slug_Context, tex: ^GPU_Texture) {
 	if tex.sampler != 0 do vk.DestroySampler(ctx.device, tex.sampler, nil)
-	if tex.view != 0    do vk.DestroyImageView(ctx.device, tex.view, nil)
-	if tex.image != 0   do vk.DestroyImage(ctx.device, tex.image, nil)
-	if tex.memory != 0  do vk.FreeMemory(ctx.device, tex.memory, nil)
+	if tex.view != 0 do vk.DestroyImageView(ctx.device, tex.view, nil)
+	if tex.image != 0 do vk.DestroyImage(ctx.device, tex.image, nil)
+	if tex.memory != 0 do vk.FreeMemory(ctx.device, tex.memory, nil)
 	tex^ = {}
 }
 
@@ -347,7 +359,7 @@ when ENABLE_VALIDATION {
 		return false
 	}
 
-	@(private="file")
+	@(private = "file")
 	runtime_default_context :: #force_inline proc "contextless" () -> runtime.Context {
 		return runtime.default_context()
 	}
@@ -357,7 +369,7 @@ when ENABLE_VALIDATION {
 
 generate_quad_indices :: proc(max_quads: int, allocator := context.allocator) -> []u32 {
 	indices := make([]u32, max_quads * INDICES_PER_QUAD, allocator)
-	for i in 0..<max_quads {
+	for i in 0 ..< max_quads {
 		base_vertex := u32(i * VERTICES_PER_QUAD)
 		base_index := i * INDICES_PER_QUAD
 		indices[base_index + 0] = base_vertex + 0

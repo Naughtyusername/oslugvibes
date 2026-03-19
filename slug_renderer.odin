@@ -1,23 +1,30 @@
 package slugvibes
 
-import "core:dynlib"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import "core:os"
-import vk "vendor:vulkan"
 import sdl "vendor:sdl3"
+import vk "vendor:vulkan"
 
 // ===================================================
-// Slug Renderer — Vulkan init, pipeline, draw calls
-// Uses SDL3 for windowing and Vulkan surface creation.
+// Slug Renderer — Vulkan initialization, pipeline setup, and draw submission.
+//
+// Rendering pipeline per frame:
+//   1. slug_begin()       — reset quad counter, wait for GPU idle
+//   2. slug_draw_text()   — emit glyph quads into the mapped vertex buffer
+//   3. slug_end()         — finalize per-font quad ranges
+//   4. slug_draw_frame()  — record command buffer, submit, present
+//
+// Each font gets its own descriptor set (curve + band textures), so draw
+// calls are batched per-font: one vkCmdDrawIndexed per active font slot.
 // ===================================================
 
 // --- Push constant layout (must match vertex shader) ---
 Slug_Push_Constants :: struct {
-	mvp:      matrix[4, 4]f32,  // 64 bytes
-	viewport: [2]f32,           // 8 bytes
+	mvp:      matrix[4, 4]f32, // 64 bytes
+	viewport: [2]f32, // 8 bytes
 }
 
 // --- Initialization ---
@@ -39,7 +46,7 @@ slug_init :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 
 	vk.load_proc_addresses_global(rawptr(get_instance_proc))
 
-	if !create_instance(ctx)      do return false
+	if !create_instance(ctx) do return false
 	vk.load_proc_addresses_instance(ctx.instance)
 
 	when ENABLE_VALIDATION {
@@ -52,20 +59,20 @@ slug_init :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 		return false
 	}
 
-	if !pick_physical_device(ctx)    do return false
-	if !create_logical_device(ctx)   do return false
+	if !pick_physical_device(ctx) do return false
+	if !create_logical_device(ctx) do return false
 	vk.load_proc_addresses_device(ctx.device)
 
-	if !create_swapchain(ctx, window)   do return false
-	if !create_image_views(ctx)         do return false
-	if !create_command_pool(ctx)        do return false
-	if !create_render_pass(ctx)         do return false
-	if !create_framebuffers(ctx)        do return false
-	if !create_descriptor_set_layout(ctx)  do return false
-	if !create_slug_pipeline(ctx)       do return false
-	if !create_command_buffers(ctx)     do return false
-	if !create_sync_objects(ctx)        do return false
-	if !create_vertex_index_buffers(ctx)   do return false
+	if !create_swapchain(ctx, window) do return false
+	if !create_image_views(ctx) do return false
+	if !create_command_pool(ctx) do return false
+	if !create_render_pass(ctx) do return false
+	if !create_framebuffers(ctx) do return false
+	if !create_descriptor_set_layout(ctx) do return false
+	if !create_slug_pipeline(ctx) do return false
+	if !create_command_buffers(ctx) do return false
+	if !create_sync_objects(ctx) do return false
+	if !create_vertex_index_buffers(ctx) do return false
 
 	return true
 }
@@ -81,7 +88,7 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 	gpu_texture_destroy(ctx, &ctx.band_texture)
 
 	// Extra font slots (1+)
-	for i in 1..<MAX_FONT_SLOTS {
+	for i in 1 ..< MAX_FONT_SLOTS {
 		fi := &ctx.font_slots[i]
 		if fi.loaded {
 			font_destroy(&fi.font)
@@ -93,15 +100,15 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 	// Vertex/index buffers
 	if ctx.vertex_buffer != 0 do vk.DestroyBuffer(ctx.device, ctx.vertex_buffer, nil)
 	if ctx.vertex_memory != 0 do vk.FreeMemory(ctx.device, ctx.vertex_memory, nil)
-	if ctx.index_buffer != 0  do vk.DestroyBuffer(ctx.device, ctx.index_buffer, nil)
-	if ctx.index_memory != 0  do vk.FreeMemory(ctx.device, ctx.index_memory, nil)
+	if ctx.index_buffer != 0 do vk.DestroyBuffer(ctx.device, ctx.index_buffer, nil)
+	if ctx.index_memory != 0 do vk.FreeMemory(ctx.device, ctx.index_memory, nil)
 
 	// Descriptors
-	if ctx.descriptor_pool != 0       do vk.DestroyDescriptorPool(ctx.device, ctx.descriptor_pool, nil)
+	if ctx.descriptor_pool != 0 do vk.DestroyDescriptorPool(ctx.device, ctx.descriptor_pool, nil)
 	if ctx.descriptor_set_layout != 0 do vk.DestroyDescriptorSetLayout(ctx.device, ctx.descriptor_set_layout, nil)
 
 	// Pipeline
-	if ctx.pipeline != 0        do vk.DestroyPipeline(ctx.device, ctx.pipeline, nil)
+	if ctx.pipeline != 0 do vk.DestroyPipeline(ctx.device, ctx.pipeline, nil)
 	if ctx.pipeline_layout != 0 do vk.DestroyPipelineLayout(ctx.device, ctx.pipeline_layout, nil)
 
 	// Command pool
@@ -135,7 +142,7 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 	if ctx.swapchain != 0 do vk.DestroySwapchainKHR(ctx.device, ctx.swapchain, nil)
 
 	if ctx.render_pass != 0 do vk.DestroyRenderPass(ctx.device, ctx.render_pass, nil)
-	if ctx.device != nil    do vk.DestroyDevice(ctx.device, nil)
+	if ctx.device != nil do vk.DestroyDevice(ctx.device, nil)
 
 	when ENABLE_VALIDATION {
 		if ctx.debug_messenger != 0 {
@@ -143,13 +150,13 @@ slug_shutdown :: proc(ctx: ^Slug_Context) {
 		}
 	}
 
-	if ctx.surface != 0   do vk.DestroySurfaceKHR(ctx.instance, ctx.surface, nil)
+	if ctx.surface != 0 do vk.DestroySurfaceKHR(ctx.instance, ctx.surface, nil)
 	if ctx.instance != nil do vk.DestroyInstance(ctx.instance, nil)
 }
 
 // --- Swapchain recreation (window resize) ---
 
-@(private="file")
+@(private = "file")
 cleanup_swapchain :: proc(ctx: ^Slug_Context) {
 	// Destroy framebuffers
 	for fb in ctx.framebuffers {
@@ -184,8 +191,10 @@ recreate_swapchain :: proc(ctx: ^Slug_Context) -> bool {
 	// Free old command buffers (count may change with new swapchain image count)
 	if ctx.command_buffers != nil {
 		vk.FreeCommandBuffers(
-			ctx.device, ctx.command_pool,
-			u32(len(ctx.command_buffers)), raw_data(ctx.command_buffers),
+			ctx.device,
+			ctx.command_pool,
+			u32(len(ctx.command_buffers)),
+			raw_data(ctx.command_buffers),
 		)
 		delete(ctx.command_buffers)
 	}
@@ -219,7 +228,7 @@ recreate_swapchain :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Instance creation ---
 
-@(private="file")
+@(private = "file")
 create_instance :: proc(ctx: ^Slug_Context) -> bool {
 	app_info := vk.ApplicationInfo {
 		sType              = .APPLICATION_INFO,
@@ -238,7 +247,7 @@ create_instance :: proc(ctx: ^Slug_Context) -> bool {
 	defer delete(extensions)
 
 	if sdl_exts != nil {
-		for i in 0..<ext_count {
+		for i in 0 ..< ext_count {
 			append(&extensions, sdl_exts[i])
 		}
 	}
@@ -257,7 +266,7 @@ create_instance :: proc(ctx: ^Slug_Context) -> bool {
 	}
 
 	when ENABLE_VALIDATION {
-		create_info.enabledLayerCount   = len(validation_layers)
+		create_info.enabledLayerCount = len(validation_layers)
 		create_info.ppEnabledLayerNames = &validation_layers[0]
 	}
 
@@ -273,7 +282,7 @@ create_instance :: proc(ctx: ^Slug_Context) -> bool {
 // --- Debug messenger ---
 
 when ENABLE_VALIDATION {
-	@(private="file")
+	@(private = "file")
 	setup_debug_messenger :: proc(ctx: ^Slug_Context) {
 		create_info := vk.DebugUtilsMessengerCreateInfoEXT {
 			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -287,7 +296,7 @@ when ENABLE_VALIDATION {
 
 // --- Physical device ---
 
-@(private="file")
+@(private = "file")
 pick_physical_device :: proc(ctx: ^Slug_Context) -> bool {
 	device_count: u32
 	vk.EnumeratePhysicalDevices(ctx.instance, &device_count, nil)
@@ -333,7 +342,7 @@ pick_physical_device :: proc(ctx: ^Slug_Context) -> bool {
 	return false
 }
 
-@(private="file")
+@(private = "file")
 find_queue_family :: proc(device: vk.PhysicalDevice, required: vk.QueueFlags) -> (u32, bool) {
 	count: u32
 	vk.GetPhysicalDeviceQueueFamilyProperties(device, &count, nil)
@@ -349,12 +358,12 @@ find_queue_family :: proc(device: vk.PhysicalDevice, required: vk.QueueFlags) ->
 	return 0, false
 }
 
-@(private="file")
+@(private = "file")
 find_present_family :: proc(ctx: ^Slug_Context, device: vk.PhysicalDevice) -> (u32, bool) {
 	count: u32
 	vk.GetPhysicalDeviceQueueFamilyProperties(device, &count, nil)
 
-	for i in 0..<count {
+	for i in 0 ..< count {
 		supported: b32
 		vk.GetPhysicalDeviceSurfaceSupportKHR(device, i, ctx.surface, &supported)
 		if supported do return i, true
@@ -364,7 +373,7 @@ find_present_family :: proc(ctx: ^Slug_Context, device: vk.PhysicalDevice) -> (u
 
 // --- Logical device ---
 
-@(private="file")
+@(private = "file")
 create_logical_device :: proc(ctx: ^Slug_Context) -> bool {
 	unique_families: [2]u32
 	family_count: u32 = 1
@@ -376,7 +385,7 @@ create_logical_device :: proc(ctx: ^Slug_Context) -> bool {
 
 	queue_priority: f32 = 1.0
 	queue_create_infos: [2]vk.DeviceQueueCreateInfo
-	for i in 0..<family_count {
+	for i in 0 ..< family_count {
 		queue_create_infos[i] = vk.DeviceQueueCreateInfo {
 			sType            = .DEVICE_QUEUE_CREATE_INFO,
 			queueFamilyIndex = unique_families[i],
@@ -411,7 +420,7 @@ create_logical_device :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Swapchain ---
 
-@(private="file")
+@(private = "file")
 create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 	capabilities: vk.SurfaceCapabilitiesKHR
 	vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(ctx.physical_device, ctx.surface, &capabilities)
@@ -420,7 +429,12 @@ create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 	vk.GetPhysicalDeviceSurfaceFormatsKHR(ctx.physical_device, ctx.surface, &format_count, nil)
 	formats := make([]vk.SurfaceFormatKHR, format_count)
 	defer delete(formats)
-	vk.GetPhysicalDeviceSurfaceFormatsKHR(ctx.physical_device, ctx.surface, &format_count, raw_data(formats))
+	vk.GetPhysicalDeviceSurfaceFormatsKHR(
+		ctx.physical_device,
+		ctx.surface,
+		&format_count,
+		raw_data(formats),
+	)
 
 	chosen_format := formats[0]
 	for sf in formats {
@@ -441,8 +455,16 @@ create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 		w, h: i32
 		sdl.GetWindowSizeInPixels(window, &w, &h)
 		extent = vk.Extent2D {
-			width  = clamp(u32(w), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-			height = clamp(u32(h), capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+			width  = clamp(
+				u32(w),
+				capabilities.minImageExtent.width,
+				capabilities.maxImageExtent.width,
+			),
+			height = clamp(
+				u32(h),
+				capabilities.minImageExtent.height,
+				capabilities.maxImageExtent.height,
+			),
 		}
 	}
 	ctx.swapchain_extent = extent
@@ -469,9 +491,9 @@ create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 
 	queue_families := [?]u32{ctx.graphics_family, ctx.present_family}
 	if ctx.graphics_family != ctx.present_family {
-		create_info.imageSharingMode      = .CONCURRENT
+		create_info.imageSharingMode = .CONCURRENT
 		create_info.queueFamilyIndexCount = 2
-		create_info.pQueueFamilyIndices   = &queue_families[0]
+		create_info.pQueueFamilyIndices = &queue_families[0]
 	} else {
 		create_info.imageSharingMode = .EXCLUSIVE
 	}
@@ -490,23 +512,23 @@ create_swapchain :: proc(ctx: ^Slug_Context, window: ^sdl.Window) -> bool {
 	return true
 }
 
-@(private="file")
+@(private = "file")
 create_image_views :: proc(ctx: ^Slug_Context) -> bool {
 	ctx.swapchain_views = make([]vk.ImageView, len(ctx.swapchain_images))
 
 	for img, i in ctx.swapchain_images {
 		create_info := vk.ImageViewCreateInfo {
-			sType    = .IMAGE_VIEW_CREATE_INFO,
-			image    = img,
+			sType = .IMAGE_VIEW_CREATE_INFO,
+			image = img,
 			viewType = .D2,
-			format   = ctx.swapchain_format.format,
+			format = ctx.swapchain_format.format,
 			components = {r = .IDENTITY, g = .IDENTITY, b = .IDENTITY, a = .IDENTITY},
 			subresourceRange = {
-				aspectMask     = {.COLOR},
-				baseMipLevel   = 0,
-				levelCount     = 1,
+				aspectMask = {.COLOR},
+				baseMipLevel = 0,
+				levelCount = 1,
 				baseArrayLayer = 0,
-				layerCount     = 1,
+				layerCount = 1,
 			},
 		}
 
@@ -522,7 +544,7 @@ create_image_views :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Command pool ---
 
-@(private="file")
+@(private = "file")
 create_command_pool :: proc(ctx: ^Slug_Context) -> bool {
 	pool_info := vk.CommandPoolCreateInfo {
 		sType            = .COMMAND_POOL_CREATE_INFO,
@@ -541,7 +563,7 @@ create_command_pool :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Render pass ---
 
-@(private="file")
+@(private = "file")
 create_render_pass :: proc(ctx: ^Slug_Context) -> bool {
 	color_attachment := vk.AttachmentDescription {
 		format         = ctx.swapchain_format.format,
@@ -595,7 +617,7 @@ create_render_pass :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Framebuffers ---
 
-@(private="file")
+@(private = "file")
 create_framebuffers :: proc(ctx: ^Slug_Context) -> bool {
 	ctx.framebuffers = make([]vk.Framebuffer, len(ctx.swapchain_views))
 
@@ -624,22 +646,22 @@ create_framebuffers :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Descriptor set layout ---
 
-@(private="file")
+@(private = "file")
 create_descriptor_set_layout :: proc(ctx: ^Slug_Context) -> bool {
 	// Binding 0: curve texture (combined image sampler)
 	// Binding 1: band texture (combined image sampler — uses usampler2D in shader)
 	bindings := [2]vk.DescriptorSetLayoutBinding {
 		{
-			binding         = 0,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			binding = 0,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			stageFlags      = {.FRAGMENT},
+			stageFlags = {.FRAGMENT},
 		},
 		{
-			binding         = 1,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			binding = 1,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			stageFlags      = {.FRAGMENT},
+			stageFlags = {.FRAGMENT},
 		},
 	}
 
@@ -649,7 +671,12 @@ create_descriptor_set_layout :: proc(ctx: ^Slug_Context) -> bool {
 		pBindings    = &bindings[0],
 	}
 
-	result := vk.CreateDescriptorSetLayout(ctx.device, &layout_info, nil, &ctx.descriptor_set_layout)
+	result := vk.CreateDescriptorSetLayout(
+		ctx.device,
+		&layout_info,
+		nil,
+		&ctx.descriptor_set_layout,
+	)
 	if result != .SUCCESS {
 		fmt.eprintln("Failed to create descriptor set layout:", result)
 		return false
@@ -660,7 +687,7 @@ create_descriptor_set_layout :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Slug graphics pipeline ---
 
-@(private="file")
+@(private = "file")
 create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 	vert_code, vert_err := os.read_entire_file("shaders/slug_vert.spv", context.allocator)
 	if vert_err != nil {
@@ -686,16 +713,16 @@ create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 
 	shader_stages := [?]vk.PipelineShaderStageCreateInfo {
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.VERTEX},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.VERTEX},
 			module = vert_module,
-			pName  = "main",
+			pName = "main",
 		},
 		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.FRAGMENT},
+			sType = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+			stage = {.FRAGMENT},
 			module = frag_module,
-			pName  = "main",
+			pName = "main",
 		},
 	}
 
@@ -707,11 +734,36 @@ create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 	}
 
 	attrib_descs := [5]vk.VertexInputAttributeDescription {
-		{binding = 0, location = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Slug_Vertex, pos))},
-		{binding = 0, location = 1, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Slug_Vertex, tex))},
-		{binding = 0, location = 2, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Slug_Vertex, jac))},
-		{binding = 0, location = 3, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Slug_Vertex, bnd))},
-		{binding = 0, location = 4, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Slug_Vertex, col))},
+		{
+			binding = 0,
+			location = 0,
+			format = .R32G32B32A32_SFLOAT,
+			offset = u32(offset_of(Slug_Vertex, pos)),
+		},
+		{
+			binding = 0,
+			location = 1,
+			format = .R32G32B32A32_SFLOAT,
+			offset = u32(offset_of(Slug_Vertex, tex)),
+		},
+		{
+			binding = 0,
+			location = 2,
+			format = .R32G32B32A32_SFLOAT,
+			offset = u32(offset_of(Slug_Vertex, jac)),
+		},
+		{
+			binding = 0,
+			location = 3,
+			format = .R32G32B32A32_SFLOAT,
+			offset = u32(offset_of(Slug_Vertex, bnd)),
+		},
+		{
+			binding = 0,
+			location = 4,
+			format = .R32G32B32A32_SFLOAT,
+			offset = u32(offset_of(Slug_Vertex, col)),
+		},
 	}
 
 	vertex_input := vk.PipelineVertexInputStateCreateInfo {
@@ -744,7 +796,7 @@ create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 		polygonMode = .FILL,
 		lineWidth   = 1.0,
-		cullMode    = {},  // No culling for text quads
+		cullMode    = {}, // No culling for text quads
 		frontFace   = .COUNTER_CLOCKWISE,
 	}
 
@@ -753,7 +805,8 @@ create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 		rasterizationSamples = {._1},
 	}
 
-	// Alpha blending: premultiplied alpha (coverage * color in fragment shader)
+	// Standard alpha blending. The fragment shader outputs coverage * color,
+	// where coverage is the antialiased winding number from the Slug algorithm.
 	color_blend_attachment := vk.PipelineColorBlendAttachmentState {
 		colorWriteMask      = {.R, .G, .B, .A},
 		blendEnable         = true,
@@ -819,7 +872,7 @@ create_slug_pipeline :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Command buffers ---
 
-@(private="file")
+@(private = "file")
 create_command_buffers :: proc(ctx: ^Slug_Context) -> bool {
 	ctx.command_buffers = make([]vk.CommandBuffer, len(ctx.swapchain_images))
 
@@ -841,7 +894,7 @@ create_command_buffers :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Sync objects ---
 
-@(private="file")
+@(private = "file")
 create_sync_objects :: proc(ctx: ^Slug_Context) -> bool {
 	n := len(ctx.swapchain_images)
 	ctx.image_available = make([]vk.Semaphore, n)
@@ -857,7 +910,7 @@ create_sync_objects :: proc(ctx: ^Slug_Context) -> bool {
 		flags = {.SIGNALED},
 	}
 
-	for i in 0..<n {
+	for i in 0 ..< n {
 		if vk.CreateSemaphore(ctx.device, &sem_info, nil, &ctx.image_available[i]) != .SUCCESS do return false
 		if vk.CreateSemaphore(ctx.device, &sem_info, nil, &ctx.render_finished[i]) != .SUCCESS do return false
 		if vk.CreateFence(ctx.device, &fence_info, nil, &ctx.in_flight_fences[i]) != .SUCCESS do return false
@@ -868,7 +921,7 @@ create_sync_objects :: proc(ctx: ^Slug_Context) -> bool {
 
 // --- Vertex and index buffers ---
 
-@(private="file")
+@(private = "file")
 create_vertex_index_buffers :: proc(ctx: ^Slug_Context) -> bool {
 	// Vertex buffer: persistently mapped HOST_VISIBLE
 	vb_size := vk.DeviceSize(MAX_GLYPH_VERTICES * size_of(Slug_Vertex))
@@ -892,7 +945,8 @@ create_vertex_index_buffers :: proc(ctx: ^Slug_Context) -> bool {
 
 	// Create staging buffer for index data
 	staging_buf, staging_mem, staging_ok := create_buffer(
-		ctx, ib_size,
+		ctx,
+		ib_size,
 		{.TRANSFER_SRC},
 		{.HOST_VISIBLE, .HOST_COHERENT},
 	)
@@ -912,7 +966,9 @@ create_vertex_index_buffers :: proc(ctx: ^Slug_Context) -> bool {
 
 	// Copy staging -> device
 	cmd := begin_one_shot_commands(ctx)
-	copy_region := vk.BufferCopy{size = ib_size}
+	copy_region := vk.BufferCopy {
+		size = ib_size,
+	}
 	vk.CmdCopyBuffer(cmd, staging_buf, ib, 1, &copy_region)
 	end_one_shot_commands(ctx, cmd)
 
@@ -926,7 +982,8 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 	curve_data_size := len(pack.curve_data) * size_of([4]u16)
 	curve_tex, curve_ok := gpu_texture_create(
 		ctx,
-		pack.curve_width, pack.curve_height,
+		pack.curve_width,
+		pack.curve_height,
 		.R16G16B16A16_SFLOAT,
 		raw_data(pack.curve_data),
 		curve_data_size,
@@ -938,7 +995,8 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 	band_data_size := len(pack.band_data) * size_of([2]u16)
 	band_tex, band_ok := gpu_texture_create(
 		ctx,
-		pack.band_width, pack.band_height,
+		pack.band_width,
+		pack.band_height,
 		.R16G16_UINT,
 		raw_data(pack.band_data),
 		band_data_size,
@@ -950,7 +1008,7 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 	pool_sizes := [1]vk.DescriptorPoolSize {
 		{
 			type            = .COMBINED_IMAGE_SAMPLER,
-			descriptorCount = 2 * MAX_FONT_SLOTS,  // 2 textures per font
+			descriptorCount = 2 * MAX_FONT_SLOTS, // 2 textures per font
 		},
 	}
 
@@ -995,20 +1053,20 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 
 	writes := [2]vk.WriteDescriptorSet {
 		{
-			sType           = .WRITE_DESCRIPTOR_SET,
-			dstSet          = ctx.descriptor_set,
-			dstBinding      = 0,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			sType = .WRITE_DESCRIPTOR_SET,
+			dstSet = ctx.descriptor_set,
+			dstBinding = 0,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			pImageInfo      = &curve_image_info,
+			pImageInfo = &curve_image_info,
 		},
 		{
-			sType           = .WRITE_DESCRIPTOR_SET,
-			dstSet          = ctx.descriptor_set,
-			dstBinding      = 1,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			sType = .WRITE_DESCRIPTOR_SET,
+			dstSet = ctx.descriptor_set,
+			dstBinding = 1,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			pImageInfo      = &band_image_info,
+			pImageInfo = &band_image_info,
 		},
 	}
 
@@ -1031,16 +1089,25 @@ slug_upload_font :: proc(ctx: ^Slug_Context, pack: ^Texture_Pack_Result) -> bool
 // ===================================================
 
 slug_begin :: proc(ctx: ^Slug_Context) {
-	// Wait for ALL in-flight GPU work to complete before overwriting the
-	// shared vertex buffer. We have one vertex buffer but multiple frames
-	// in flight — any of them could still be reading from it.
-	if ctx.device != nil {
-		vk.DeviceWaitIdle(ctx.device)
+	// We use a single persistently-mapped vertex buffer shared across all
+	// frames in flight. Before overwriting it with new quad data, we must
+	// wait for ALL in-flight frames to finish reading. This is simpler than
+	// double-buffering the vertex buffer, at the cost of serializing CPU/GPU
+	// when multiple frames are queued. Fine for a demo; a production renderer
+	// would use per-frame vertex buffers or a ring buffer.
+	if ctx.device != nil && ctx.in_flight_fences != nil {
+		vk.WaitForFences(
+			ctx.device,
+			u32(len(ctx.in_flight_fences)),
+			raw_data(ctx.in_flight_fences),
+			true, // waitAll
+			max(u64),
+		)
 	}
 
 	ctx.quad_count = 0
 	ctx.active_font_idx = 0
-	for i in 0..<MAX_FONT_SLOTS {
+	for i in 0 ..< MAX_FONT_SLOTS {
 		ctx.font_quad_start[i] = 0
 		ctx.font_quad_count[i] = 0
 	}
@@ -1086,7 +1153,7 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 
 	font_load_ascii(&fi.font)
 
-	for gi in 0..<MAX_CACHED_GLYPHS {
+	for gi in 0 ..< MAX_CACHED_GLYPHS {
 		g := &fi.font.glyphs[gi]
 		if g.valid && len(g.curves) > 0 {
 			glyph_process(g)
@@ -1100,7 +1167,8 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 	curve_data_size := len(pack.curve_data) * size_of([4]u16)
 	curve_tex, curve_ok := gpu_texture_create(
 		ctx,
-		pack.curve_width, pack.curve_height,
+		pack.curve_width,
+		pack.curve_height,
 		.R16G16B16A16_SFLOAT,
 		raw_data(pack.curve_data),
 		curve_data_size,
@@ -1112,7 +1180,8 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 	band_data_size := len(pack.band_data) * size_of([2]u16)
 	band_tex, band_ok := gpu_texture_create(
 		ctx,
-		pack.band_width, pack.band_height,
+		pack.band_width,
+		pack.band_height,
 		.R16G16_UINT,
 		raw_data(pack.band_data),
 		band_data_size,
@@ -1121,7 +1190,7 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 	fi.band_texture = band_tex
 
 	// Allocate descriptor set from the existing pool
-	alloc_info := vk.DescriptorSetAllocateInfo{
+	alloc_info := vk.DescriptorSetAllocateInfo {
 		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
 		descriptorPool     = ctx.descriptor_pool,
 		descriptorSetCount = 1,
@@ -1135,32 +1204,32 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 	}
 
 	// Write descriptor set
-	curve_image_info := vk.DescriptorImageInfo{
+	curve_image_info := vk.DescriptorImageInfo {
 		imageLayout = .SHADER_READ_ONLY_OPTIMAL,
 		imageView   = fi.curve_texture.view,
 		sampler     = fi.curve_texture.sampler,
 	}
-	band_image_info := vk.DescriptorImageInfo{
+	band_image_info := vk.DescriptorImageInfo {
 		imageLayout = .SHADER_READ_ONLY_OPTIMAL,
 		imageView   = fi.band_texture.view,
 		sampler     = fi.band_texture.sampler,
 	}
-	writes := [2]vk.WriteDescriptorSet{
+	writes := [2]vk.WriteDescriptorSet {
 		{
-			sType           = .WRITE_DESCRIPTOR_SET,
-			dstSet          = fi.descriptor_set,
-			dstBinding      = 0,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			sType = .WRITE_DESCRIPTOR_SET,
+			dstSet = fi.descriptor_set,
+			dstBinding = 0,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			pImageInfo      = &curve_image_info,
+			pImageInfo = &curve_image_info,
 		},
 		{
-			sType           = .WRITE_DESCRIPTOR_SET,
-			dstSet          = fi.descriptor_set,
-			dstBinding      = 1,
-			descriptorType  = .COMBINED_IMAGE_SAMPLER,
+			sType = .WRITE_DESCRIPTOR_SET,
+			dstSet = fi.descriptor_set,
+			dstBinding = 1,
+			descriptorType = .COMBINED_IMAGE_SAMPLER,
 			descriptorCount = 1,
-			pImageInfo      = &band_image_info,
+			pImageInfo = &band_image_info,
 		},
 	}
 	vk.UpdateDescriptorSets(ctx.device, len(writes), &writes[0], 0, nil)
@@ -1175,7 +1244,15 @@ slug_load_font_slot :: proc(ctx: ^Slug_Context, slot: int, path: string, name: s
 
 // Measure a string's dimensions without drawing.
 // Returns (width, height) in screen pixels at the given font_size.
-measure_text :: proc(font: ^Font, text: string, font_size: f32, use_kerning: bool = true) -> (width: f32, height: f32) {
+measure_text :: proc(
+	font: ^Font,
+	text: string,
+	font_size: f32,
+	use_kerning: bool = true,
+) -> (
+	width: f32,
+	height: f32,
+) {
 	pen_x: f32 = 0
 	prev_rune: rune = 0
 	for ch in text {
@@ -1234,6 +1311,8 @@ slug_draw_text :: proc(
 		}
 
 		// Position the glyph quad in Y-down screen space.
+		// y parameter is the baseline. Em-space bbox_max.y is above the baseline
+		// (positive in Y-up), so subtract it to get the top-left in Y-down screen coords.
 		glyph_x := pen_x + g.bbox_min.x * font_size
 		glyph_y := y - g.bbox_max.y * font_size
 
@@ -1249,12 +1328,7 @@ slug_draw_text :: proc(
 	}
 }
 
-emit_glyph_quad :: proc(
-	ctx: ^Slug_Context,
-	g: ^Glyph_Data,
-	x, y, w, h: f32,
-	color: [4]f32,
-) {
+emit_glyph_quad :: proc(ctx: ^Slug_Context, g: ^Glyph_Data, x, y, w, h: f32, color: [4]f32) {
 	base := ctx.quad_count * VERTICES_PER_QUAD
 	if base + VERTICES_PER_QUAD > MAX_GLYPH_VERTICES do return
 
@@ -1262,51 +1336,54 @@ emit_glyph_quad :: proc(
 	em_min := g.bbox_min
 	em_max := g.bbox_max
 
-	// Pack glyph data into float bits (matching the vertex shader's unpack)
-	// tex.z = (band_tex_y << 16) | band_tex_x
-	// tex.w = (band_max_y << 16) | band_max_x  (with flags in high bits of band_max_y)
+	// Pack glyph data as u32 bit patterns inside f32 fields — the vertex
+	// shader unpacks them with floatBitsToUint(). This avoids needing extra
+	// vertex attributes or uniform buffers for per-glyph metadata.
+	// tex.z = (band_tex_y << 16) | band_tex_x   -> where this glyph starts in the band texture
+	// tex.w = (band_max_y << 16) | band_max_x   -> number of bands minus 1 in each direction
 	glyph_loc := transmute(f32)(u32(g.band_tex_x) | (u32(g.band_tex_y) << 16))
-	band_max  := transmute(f32)(u32(g.band_max_x) | (u32(g.band_max_y) << 16))
+	band_max := transmute(f32)(u32(g.band_max_x) | (u32(g.band_max_y) << 16))
 
 	// Inverse Jacobian: maps object-space displacement to em-space displacement
 	// Since we're doing a simple scale: em = (obj - origin) / size * em_range
 	// The Jacobian is diagonal: d(em)/d(obj) = em_range / obj_size
 	em_w := em_max.x - em_min.x
 	em_h := em_max.y - em_min.y
-	jac_00 := em_w / w if w > 0 else 0    // d(em_x)/d(obj_x)
+	jac_00 := em_w / w if w > 0 else 0 // d(em_x)/d(obj_x)
 	jac_11 := -(em_h / h) if h > 0 else 0 // d(em_y)/d(obj_y) — negative because screen Y is down, em Y is up
 
-	// Dilation normals (pointing outward from each corner)
-	// These are not unit length — the vertex shader normalizes them.
-	// For a simple quad, normals point diagonally outward at corners.
+	// Dilation: the vertex shader pushes each corner outward by ~1 pixel
+	// so the quad slightly overlaps its tight bounding box. Without this,
+	// antialiasing samples at glyph edges would be clipped by the quad boundary.
+	// The normals give direction; the vertex shader computes the actual displacement.
 	DILATION_SCALE :: f32(1.0)
 
 	// 4 vertices in screen-space (Y-down): TL, TR, BR, BL
 	// In screen space: (x,y) is top-left, (x+w, y+h) is bottom-right.
 	// Em-space has Y-up: top-left in em = (em_min.x, em_max.y),
 	//                    bottom-right in em = (em_max.x, em_min.y).
-	corners := [4][2]f32{
-		{x,     y},         // TL (screen)
-		{x + w, y},         // TR
-		{x + w, y + h},     // BR
-		{x,     y + h},     // BL
+	corners := [4][2]f32 {
+		{x, y}, // TL (screen)
+		{x + w, y}, // TR
+		{x + w, y + h}, // BR
+		{x, y + h}, // BL
 	}
 
-	normals := [4][2]f32{
-		{-DILATION_SCALE,  -DILATION_SCALE},  // TL -> out toward top-left
-		{ DILATION_SCALE,  -DILATION_SCALE},  // TR
-		{ DILATION_SCALE,   DILATION_SCALE},  // BR
-		{-DILATION_SCALE,   DILATION_SCALE},  // BL
+	normals := [4][2]f32 {
+		{-DILATION_SCALE, -DILATION_SCALE}, // TL -> out toward top-left
+		{DILATION_SCALE, -DILATION_SCALE}, // TR
+		{DILATION_SCALE, DILATION_SCALE}, // BR
+		{-DILATION_SCALE, DILATION_SCALE}, // BL
 	}
 
-	em_coords := [4][2]f32{
-		{em_min.x, em_max.y},  // TL in em-space (Y-up: max.y is top)
-		{em_max.x, em_max.y},  // TR
-		{em_max.x, em_min.y},  // BR (Y-up: min.y is bottom)
-		{em_min.x, em_min.y},  // BL
+	em_coords := [4][2]f32 {
+		{em_min.x, em_max.y}, // TL in em-space (Y-up: max.y is top)
+		{em_max.x, em_max.y}, // TR
+		{em_max.x, em_min.y}, // BR (Y-up: min.y is bottom)
+		{em_min.x, em_min.y}, // BL
 	}
 
-	for vi in 0..<4 {
+	for vi in 0 ..< 4 {
 		ctx.vertex_mapped[base + u32(vi)] = Slug_Vertex {
 			pos = {corners[vi].x, corners[vi].y, normals[vi].x, normals[vi].y},
 			tex = {em_coords[vi].x, em_coords[vi].y, glyph_loc, band_max},
@@ -1326,7 +1403,7 @@ emit_glyph_quad_transformed :: proc(
 	ctx: ^Slug_Context,
 	g: ^Glyph_Data,
 	center_x, center_y: f32,
-	xform: matrix[2, 2]f32,  // maps em-space-sized offsets to screen-space
+	xform: matrix[2, 2]f32, // maps em-space-sized offsets to screen-space
 	color: [4]f32,
 ) {
 	base := ctx.quad_count * VERTICES_PER_QUAD
@@ -1341,45 +1418,43 @@ emit_glyph_quad_transformed :: proc(
 
 	// Pack glyph data
 	glyph_loc := transmute(f32)(u32(g.band_tex_x) | (u32(g.band_tex_y) << 16))
-	band_max  := transmute(f32)(u32(g.band_max_x) | (u32(g.band_max_y) << 16))
+	band_max := transmute(f32)(u32(g.band_max_x) | (u32(g.band_max_y) << 16))
 
 	// Em-space corner offsets relative to em-space center (Y-up in em-space)
 	// Order: TL, TR, BR, BL in em-space
-	em_offsets := [4][2]f32{
-		{em_min.x - em_cx,  em_max.y - em_cy},  // TL in em (left, top)
-		{em_max.x - em_cx,  em_max.y - em_cy},  // TR
-		{em_max.x - em_cx,  em_min.y - em_cy},  // BR
-		{em_min.x - em_cx,  em_min.y - em_cy},  // BL
+	em_offsets := [4][2]f32 {
+		{em_min.x - em_cx, em_max.y - em_cy}, // TL in em (left, top)
+		{em_max.x - em_cx, em_max.y - em_cy}, // TR
+		{em_max.x - em_cx, em_min.y - em_cy}, // BR
+		{em_min.x - em_cx, em_min.y - em_cy}, // BL
 	}
 
-	em_coords := [4][2]f32{
-		{em_min.x, em_max.y},  // TL
-		{em_max.x, em_max.y},  // TR
-		{em_max.x, em_min.y},  // BR
-		{em_min.x, em_min.y},  // BL
+	em_coords := [4][2]f32 {
+		{em_min.x, em_max.y}, // TL
+		{em_max.x, em_max.y}, // TR
+		{em_max.x, em_min.y}, // BR
+		{em_min.x, em_min.y}, // BL
 	}
 
-	// Inverse Jacobian: maps screen-space delta to em-space delta
-	// Forward: screen = xform * em_offset
-	// Inverse: em_delta = xform^-1 * screen_delta
-	// But we also need the Y-flip (em Y-up vs screen Y-down)
+	// Inverse Jacobian: maps screen-space delta to em-space delta.
+	// The xform maps em-space to screen-space (rotation + scale), so we need
+	// its inverse for the fragment shader's fwidth() calculation. The Y-flip
+	// (em Y-up vs screen Y-down) is baked into the negated row here —
+	// row 1 signs are flipped relative to a standard 2x2 inverse.
 	det := xform[0, 0] * xform[1, 1] - xform[0, 1] * xform[1, 0]
 	inv_det := 1.0 / det if abs(det) > 1e-10 else 0.0
-	// Inverse of xform, with Y negation for em-space Y-up
 	inv_jac := matrix[2, 2]f32{
-		 xform[1, 1] * inv_det,
-		-xform[0, 1] * inv_det,
-		 xform[1, 0] * inv_det,  // negated again for Y-flip = positive
-		-xform[0, 0] * inv_det,  // negated again for Y-flip = negative
+		 xform[1, 1] * inv_det, -xform[0, 1] * inv_det,
+		 xform[1, 0] * inv_det, -xform[0, 0] * inv_det, // signs differ from standard inverse due to Y-flip
 	}
 
 	DILATION_SCALE :: f32(1.0)
 
-	for vi in 0..<4 {
+	for vi in 0 ..< 4 {
 		// Transform em-space offset to screen-space offset
 		// Note: em Y-up, screen Y-down, so negate Y component of em offset
 		off := em_offsets[vi]
-		screen_off := [2]f32{
+		screen_off := [2]f32 {
 			xform[0, 0] * off.x + xform[0, 1] * (-off.y),
 			xform[1, 0] * off.x + xform[1, 1] * (-off.y),
 		}
@@ -1393,7 +1468,7 @@ emit_glyph_quad_transformed :: proc(
 			ny = ny / len_n * DILATION_SCALE
 		}
 
-		ctx.vertex_mapped[base + u32(vi)] = Slug_Vertex{
+		ctx.vertex_mapped[base + u32(vi)] = Slug_Vertex {
 			pos = {center_x + screen_off.x, center_y + screen_off.y, nx, ny},
 			tex = {em_coords[vi].x, em_coords[vi].y, glyph_loc, band_max},
 			jac = {inv_jac[0, 0], inv_jac[0, 1], inv_jac[1, 0], inv_jac[1, 1]},
@@ -1420,8 +1495,12 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 	// Acquire next swapchain image
 	image_index: u32
 	acquire_result := vk.AcquireNextImageKHR(
-		ctx.device, ctx.swapchain, max(u64),
-		ctx.image_available[frame], 0, &image_index,
+		ctx.device,
+		ctx.swapchain,
+		max(u64),
+		ctx.image_available[frame],
+		0,
+		&image_index,
 	)
 	if acquire_result == .ERROR_OUT_OF_DATE_KHR {
 		// Swapchain is incompatible with the surface — must recreate before drawing.
@@ -1453,10 +1532,10 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 	clear_color.color.float32 = {0.05, 0.05, 0.08, 1.0}
 
 	rp_begin := vk.RenderPassBeginInfo {
-		sType       = .RENDER_PASS_BEGIN_INFO,
-		renderPass  = ctx.render_pass,
-		framebuffer = ctx.framebuffers[image_index],
-		renderArea  = {{0, 0}, ctx.swapchain_extent},
+		sType           = .RENDER_PASS_BEGIN_INFO,
+		renderPass      = ctx.render_pass,
+		framebuffer     = ctx.framebuffers[image_index],
+		renderArea      = {{0, 0}, ctx.swapchain_extent},
 		clearValueCount = 1,
 		pClearValues    = &clear_color,
 	}
@@ -1484,7 +1563,10 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		// Bind pipeline
 		vk.CmdBindPipeline(cmd, .GRAPHICS, ctx.pipeline)
 
-		// Push constants: orthographic projection + viewport
+		// Push constants: orthographic projection + viewport size.
+		// ortho(0, w, 0, h) — bottom=0 top=h. Vulkan clips Y to [0,1] in NDC
+		// and the Odin ortho function accounts for this. Using (0, w, h, 0)
+		// would flip Y and render everything upside-down.
 		w := f32(ctx.swapchain_extent.width)
 		h := f32(ctx.swapchain_extent.height)
 
@@ -1494,16 +1576,24 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		zoom := ctx.zoom if ctx.zoom > 0 else 1.0
 		cx := w * 0.5
 		cy := h * 0.5
-		view := linalg.matrix4_translate_f32({cx + ctx.pan.x, cy + ctx.pan.y, 0}) *
-		        linalg.matrix4_scale_f32({zoom, zoom, 1}) *
-		        linalg.matrix4_translate_f32({-cx, -cy, 0})
+		view :=
+			linalg.matrix4_translate_f32({cx + ctx.pan.x, cy + ctx.pan.y, 0}) *
+			linalg.matrix4_scale_f32({zoom, zoom, 1}) *
+			linalg.matrix4_translate_f32({-cx, -cy, 0})
 
 		pc := Slug_Push_Constants {
-			mvp = proj * view,
+			mvp      = proj * view,
 			viewport = {w, h},
 		}
 
-		vk.CmdPushConstants(cmd, ctx.pipeline_layout, {.VERTEX}, 0, size_of(Slug_Push_Constants), &pc)
+		vk.CmdPushConstants(
+			cmd,
+			ctx.pipeline_layout,
+			{.VERTEX},
+			0,
+			size_of(Slug_Push_Constants),
+			&pc,
+		)
 
 		// Bind vertex and index buffers
 		vb_offset := vk.DeviceSize(0)
@@ -1511,7 +1601,7 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		vk.CmdBindIndexBuffer(cmd, ctx.index_buffer, 0, .UINT32)
 
 		// Issue per-font draw calls (each font has its own textures/descriptor set)
-		for fi in 0..<MAX_FONT_SLOTS {
+		for fi in 0 ..< MAX_FONT_SLOTS {
 			qcount := ctx.font_quad_count[fi]
 			if qcount == 0 do continue
 
@@ -1541,7 +1631,12 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 		pSignalSemaphores    = &ctx.render_finished[frame],
 	}
 
-	submit_result := vk.QueueSubmit(ctx.graphics_queue, 1, &submit_info, ctx.in_flight_fences[frame])
+	submit_result := vk.QueueSubmit(
+		ctx.graphics_queue,
+		1,
+		&submit_info,
+		ctx.in_flight_fences[frame],
+	)
 	if submit_result != .SUCCESS {
 		fmt.eprintln("Failed to submit draw command:", submit_result)
 		return false
@@ -1558,7 +1653,9 @@ slug_draw_frame :: proc(ctx: ^Slug_Context) -> bool {
 	}
 
 	present_result := vk.QueuePresentKHR(ctx.present_queue, &present_info)
-	if present_result == .ERROR_OUT_OF_DATE_KHR || present_result == .SUBOPTIMAL_KHR || ctx.framebuffer_resized {
+	if present_result == .ERROR_OUT_OF_DATE_KHR ||
+	   present_result == .SUBOPTIMAL_KHR ||
+	   ctx.framebuffer_resized {
 		// Swapchain is stale — recreate it. This is the correct place to handle
 		// SUBOPTIMAL too: the frame was presented, but the swapchain no longer
 		// matches the surface optimally (e.g. after a resize on Wayland).

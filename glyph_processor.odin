@@ -4,7 +4,18 @@ import "core:fmt"
 import "core:math"
 
 // ===================================================
-// Glyph processing: band generation and texture packing
+// Glyph processing: band generation and texture packing.
+//
+// Bands are the key spatial acceleration structure in Slug. Each glyph's
+// bounding box is sliced into horizontal and vertical bands. Each band
+// stores only the curve indices that overlap it. The fragment shader
+// determines which band the current pixel falls in and only evaluates
+// those curves, turning O(n) per-pixel into O(n/sqrt(n)) on average.
+//
+// After band generation, all glyph data is packed into two GPU textures:
+//   - Curve texture (float16x4): control points, 2 texels per curve
+//   - Band texture (uint16x2): band headers + curve index lists
+// Both are 4096 texels wide; glyphs are packed left-to-right, wrapping rows.
 // ===================================================
 
 // Process a glyph: generate horizontal and vertical bands, sort curves.
@@ -13,7 +24,9 @@ glyph_process :: proc(g: ^Glyph_Data) {
 
 	num_curves := len(g.curves)
 
-	// Band count heuristic: more bands = fewer curves per band = faster shader
+	// Band count heuristic: ~2*sqrt(n) bands balances fewer curves per band
+	// (faster shader) against more band texture overhead. A glyph with 16
+	// curves gets ~8 bands; one with 100 curves gets ~20.
 	band_count := max(1, int(math.sqrt(f32(num_curves)) * 2.0))
 
 	bbox_w := g.bbox_max.x - g.bbox_min.x
@@ -45,7 +58,7 @@ glyph_process :: proc(g: ^Glyph_Data) {
 		delete(v_lists)
 	}
 
-	for ci in 0..<num_curves {
+	for ci in 0 ..< num_curves {
 		curve := &g.curves[ci]
 
 		// Y extent for horizontal band membership
@@ -58,27 +71,29 @@ glyph_process :: proc(g: ^Glyph_Data) {
 
 		// Determine which horizontal bands this curve intersects
 		band_y_start := int(math.floor((min_y - g.bbox_min.y) / bbox_h * f32(h_band_count)))
-		band_y_end   := int(math.floor((max_y - g.bbox_min.y) / bbox_h * f32(h_band_count)))
+		band_y_end := int(math.floor((max_y - g.bbox_min.y) / bbox_h * f32(h_band_count)))
 		band_y_start = clamp(band_y_start, 0, h_band_count - 1)
-		band_y_end   = clamp(band_y_end, 0, h_band_count - 1)
+		band_y_end = clamp(band_y_end, 0, h_band_count - 1)
 
-		for bi in band_y_start..=band_y_end {
+		for bi in band_y_start ..= band_y_end {
 			append(&h_lists[bi], u16(ci))
 		}
 
 		// Determine which vertical bands this curve intersects
 		band_x_start := int(math.floor((min_x - g.bbox_min.x) / bbox_w * f32(v_band_count)))
-		band_x_end   := int(math.floor((max_x - g.bbox_min.x) / bbox_w * f32(v_band_count)))
+		band_x_end := int(math.floor((max_x - g.bbox_min.x) / bbox_w * f32(v_band_count)))
 		band_x_start = clamp(band_x_start, 0, v_band_count - 1)
-		band_x_end   = clamp(band_x_end, 0, v_band_count - 1)
+		band_x_end = clamp(band_x_end, 0, v_band_count - 1)
 
-		for bi in band_x_start..=band_x_end {
+		for bi in band_x_start ..= band_x_end {
 			append(&v_lists[bi], u16(ci))
 		}
 	}
 
-	// Sort band curve lists by descending max coordinate (for early-exit optimization in shader)
-	// Manual sort since Odin closures can't capture variables
+	// Sort by descending max coordinate so the fragment shader can early-exit:
+	// once a curve's max x (or y) is left of (or below) the pixel, all remaining
+	// curves in the band are too, so the loop can break immediately.
+	// Using insertion sort — band lists are typically 2-10 entries.
 	for &list in h_lists {
 		sort_curve_indices_by_max_x(list[:], g.curves[:])
 	}
@@ -88,8 +103,8 @@ glyph_process :: proc(g: ^Glyph_Data) {
 
 	// Pack curve lists into flat arrays and record band headers
 	clear(&g.h_curve_lists)
-	for bi in 0..<h_band_count {
-		g.h_bands[bi] = Band{
+	for bi in 0 ..< h_band_count {
+		g.h_bands[bi] = Band {
 			curve_count = u16(len(h_lists[bi])),
 			data_offset = u16(len(g.h_curve_lists)),
 		}
@@ -99,8 +114,8 @@ glyph_process :: proc(g: ^Glyph_Data) {
 	}
 
 	clear(&g.v_curve_lists)
-	for bi in 0..<v_band_count {
-		g.v_bands[bi] = Band{
+	for bi in 0 ..< v_band_count {
+		g.v_bands[bi] = Band {
 			curve_count = u16(len(v_lists[bi])),
 			data_offset = u16(len(g.v_curve_lists)),
 		}
@@ -117,10 +132,7 @@ glyph_process :: proc(g: ^Glyph_Data) {
 	// bandIndex = renderCoord * scale + offset
 	// For horizontal bands (Y axis): band_index_y = (y - bbox_min.y) / bbox_h * h_band_count
 	//   = y * (h_band_count / bbox_h) + (-bbox_min.y * h_band_count / bbox_h)
-	g.band_scale = {
-		f32(v_band_count) / bbox_w,
-		f32(h_band_count) / bbox_h,
-	}
+	g.band_scale = {f32(v_band_count) / bbox_w, f32(h_band_count) / bbox_h}
 	g.band_offset = {
 		-g.bbox_min.x * f32(v_band_count) / bbox_w,
 		-g.bbox_min.y * f32(h_band_count) / bbox_h,
@@ -135,7 +147,11 @@ sort_curve_indices_by_max_x :: proc(indices: []u16, curves: []Bezier_Curve) {
 		key_max_x := max(curves[key].p1.x, curves[key].p2.x, curves[key].p3.x)
 		j := i - 1
 		for j >= 0 {
-			j_max_x := max(curves[indices[j]].p1.x, curves[indices[j]].p2.x, curves[indices[j]].p3.x)
+			j_max_x := max(
+				curves[indices[j]].p1.x,
+				curves[indices[j]].p2.x,
+				curves[indices[j]].p3.x,
+			)
 			if j_max_x >= key_max_x do break
 			indices[j + 1] = indices[j]
 			j -= 1
@@ -151,7 +167,11 @@ sort_curve_indices_by_max_y :: proc(indices: []u16, curves: []Bezier_Curve) {
 		key_max_y := max(curves[key].p1.y, curves[key].p2.y, curves[key].p3.y)
 		j := i - 1
 		for j >= 0 {
-			j_max_y := max(curves[indices[j]].p1.y, curves[indices[j]].p2.y, curves[indices[j]].p3.y)
+			j_max_y := max(
+				curves[indices[j]].p1.y,
+				curves[indices[j]].p2.y,
+				curves[indices[j]].p3.y,
+			)
 			if j_max_y >= key_max_y do break
 			indices[j + 1] = indices[j]
 			j -= 1
@@ -193,7 +213,7 @@ pack_glyph_textures :: proc(font: ^Font) -> (result: Texture_Pack_Result) {
 	band_x: u32 = 0
 	band_y: u32 = 0
 
-	for gi in 0..<MAX_CACHED_GLYPHS {
+	for gi in 0 ..< MAX_CACHED_GLYPHS {
 		g := &font.glyphs[gi]
 		if !g.valid || len(g.curves) == 0 do continue
 
@@ -217,15 +237,20 @@ pack_glyph_textures :: proc(font: ^Font) -> (result: Texture_Pack_Result) {
 
 		for &curve in g.curves {
 			// Texel 1: p1.xy, p2.xy
-			append(&result.curve_data, [4]u16{
-				f32_to_f16(curve.p1.x), f32_to_f16(curve.p1.y),
-				f32_to_f16(curve.p2.x), f32_to_f16(curve.p2.y),
-			})
+			append(
+				&result.curve_data,
+				[4]u16 {
+					f32_to_f16(curve.p1.x),
+					f32_to_f16(curve.p1.y),
+					f32_to_f16(curve.p2.x),
+					f32_to_f16(curve.p2.y),
+				},
+			)
 			// Texel 2: p3.xy, unused
-			append(&result.curve_data, [4]u16{
-				f32_to_f16(curve.p3.x), f32_to_f16(curve.p3.y),
-				0, 0,
-			})
+			append(
+				&result.curve_data,
+				[4]u16{f32_to_f16(curve.p3.x), f32_to_f16(curve.p3.y), 0, 0},
+			)
 			curve_x += 2
 		}
 
@@ -257,29 +282,32 @@ pack_glyph_textures :: proc(font: ^Font) -> (result: Texture_Pack_Result) {
 		curve_list_base := u32(h_count + v_count)
 
 		// Horizontal band headers: (curve_count, data_offset_from_glyph_start)
-		for bi in 0..<h_count {
+		for bi in 0 ..< h_count {
 			band := &g.h_bands[bi]
 			// data_offset is relative to the glyph's position in the band texture
 			// The shader uses CalcBandLoc(glyphLoc, offset) where offset is the band header's y component
-			append(&result.band_data, [2]u16{
-				band.curve_count,
-				u16(curve_list_base + u32(band.data_offset)),
-			})
+			append(
+				&result.band_data,
+				[2]u16{band.curve_count, u16(curve_list_base + u32(band.data_offset))},
+			)
 		}
 
 		// Vertical band headers
-		for bi in 0..<v_count {
+		for bi in 0 ..< v_count {
 			band := &g.v_bands[bi]
-			append(&result.band_data, [2]u16{
-				band.curve_count,
-				u16(curve_list_base + u32(len(g.h_curve_lists)) + u32(band.data_offset)),
-			})
+			append(
+				&result.band_data,
+				[2]u16 {
+					band.curve_count,
+					u16(curve_list_base + u32(len(g.h_curve_lists)) + u32(band.data_offset)),
+				},
+			)
 		}
 
 		// Horizontal curve index lists — each entry is the (x, y) position of the curve in the curve texture
 		for ci in g.h_curve_lists {
 			// Convert curve index to curve texture location
-			curve_texel_offset := u32(ci) * 2  // Each curve is 2 texels
+			curve_texel_offset := u32(ci) * 2 // Each curve is 2 texels
 			ctx_x := u32(g.curve_tex_x) + curve_texel_offset
 			ctx_y := u32(g.curve_tex_y)
 			// Handle wrapping
@@ -308,19 +336,25 @@ pack_glyph_textures :: proc(font: ^Font) -> (result: Texture_Pack_Result) {
 	result.band_height = max(band_y + 1, 1)
 
 	// Pad to fill full rows
-	target_curve_texels := result.curve_width * result.curve_height
-	for u32(len(result.curve_data)) < target_curve_texels {
-		append(&result.curve_data, [4]u16{0, 0, 0, 0})
+	target_curve_texels := int(result.curve_width * result.curve_height)
+	if len(result.curve_data) < target_curve_texels {
+		resize(&result.curve_data, target_curve_texels)
 	}
 
-	target_band_texels := result.band_width * result.band_height
-	for u32(len(result.band_data)) < target_band_texels {
-		append(&result.band_data, [2]u16{0, 0})
+	target_band_texels := int(result.band_width * result.band_height)
+	if len(result.band_data) < target_band_texels {
+		resize(&result.band_data, target_band_texels)
 	}
 
-	fmt.printf("Texture pack: curve=%dx%d (%d texels), band=%dx%d (%d texels)\n",
-		result.curve_width, result.curve_height, len(result.curve_data),
-		result.band_width, result.band_height, len(result.band_data))
+	fmt.printf(
+		"Texture pack: curve=%dx%d (%d texels), band=%dx%d (%d texels)\n",
+		result.curve_width,
+		result.curve_height,
+		len(result.curve_data),
+		result.band_width,
+		result.band_height,
+		len(result.band_data),
+	)
 
 	return result
 }
@@ -329,12 +363,15 @@ pack_glyph_textures :: proc(font: ^Font) -> (result: Texture_Pack_Result) {
 // ===================================================
 // Float16 conversion (f32 -> f16 stored as u16)
 // ===================================================
+// Manual IEEE 754 conversion because Odin's core:math doesn't provide f16
+// and we need raw u16 bits for the R16G16B16A16_SFLOAT texture upload.
+// Em-space coordinates are in [0, ~1] so f16 precision is more than adequate.
 
 f32_to_f16 :: proc(value: f32) -> u16 {
 	bits := transmute(u32)value
 
 	sign := (bits >> 16) & 0x8000
-	exp  := i32((bits >> 23) & 0xFF) - 127
+	exp := i32((bits >> 23) & 0xFF) - 127
 	mant := bits & 0x007FFFFF
 
 	if exp == 128 {

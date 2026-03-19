@@ -16,12 +16,8 @@ hsv_to_rgb :: proc(h, s, v: f32) -> [3]f32 {
 	m := v - c
 
 	r, g, b: f32
-	if hp < 1      { r, g, b = c, x, 0 }
-	else if hp < 2 { r, g, b = x, c, 0 }
-	else if hp < 3 { r, g, b = 0, c, x }
-	else if hp < 4 { r, g, b = 0, x, c }
-	else if hp < 5 { r, g, b = x, 0, c }
-	else           { r, g, b = c, 0, x }
+	if hp <
+	   1 {r, g, b = c, x, 0} else if hp < 2 {r, g, b = x, c, 0} else if hp < 3 {r, g, b = 0, c, x} else if hp < 4 {r, g, b = 0, x, c} else if hp < 5 {r, g, b = x, 0, c} else {r, g, b = c, 0, x}
 
 	return {r + m, g + m, b + m}
 }
@@ -35,8 +31,8 @@ draw_text_rainbow :: proc(
 	x, y: f32,
 	font_size: f32,
 	time: f32,
-	speed: f32,       // hue rotation speed (degrees/sec)
-	spread: f32,      // hue offset per character (degrees)
+	speed: f32, // hue rotation speed (degrees/sec)
+	spread: f32, // hue offset per character (degrees)
 ) {
 	font := slug_active_font(ctx)
 	pen_x := x
@@ -75,9 +71,9 @@ draw_text_wobble :: proc(
 	x, y: f32,
 	font_size: f32,
 	time: f32,
-	amplitude: f32,   // max vertical displacement in pixels
-	frequency: f32,   // wave speed
-	phase_step: f32,  // phase offset per character
+	amplitude: f32, // max vertical displacement in pixels
+	frequency: f32, // wave speed
+	phase_step: f32, // phase offset per character
 ) {
 	font := slug_active_font(ctx)
 	pen_x := x
@@ -118,8 +114,8 @@ draw_text_shake :: proc(
 	text: string,
 	x, y: f32,
 	font_size: f32,
-	intensity: f32,  // max displacement in pixels
-	time: f32,       // used to vary the shake over time
+	intensity: f32, // max displacement in pixels
+	time: f32, // used to vary the shake over time
 ) {
 	font := slug_active_font(ctx)
 	pen_x := x
@@ -157,16 +153,15 @@ draw_text_shake :: proc(
 draw_text_rotated :: proc(
 	ctx: ^Slug_Context,
 	text: string,
-	cx, cy: f32,       // center of rotation in screen space
+	cx, cy: f32, // center of rotation in screen space
 	font_size: f32,
-	angle: f32,         // radians
+	angle: f32, // radians
 	color: [4]f32,
 ) {
 	font := slug_active_font(ctx)
 
 	// Measure total width to center the text
-	total_w, _ := measure_text(font, text, font_size)
-	text_h := (font.ascent - font.descent) * font_size
+	total_w, text_h := measure_text(font, text, font_size)
 
 	cos_a := math.cos(angle)
 	sin_a := math.sin(angle)
@@ -174,12 +169,12 @@ draw_text_rotated :: proc(
 	// 2x2 rotation+scale matrix: maps em-space to screen-space
 	// font_size scales em coords to pixels, rotation rotates them
 	xform := matrix[2, 2]f32{
-		cos_a * font_size, -sin_a * font_size,
-		sin_a * font_size,  cos_a * font_size,
+		cos_a * font_size, -sin_a * font_size, 
+		sin_a * font_size, cos_a * font_size, 
 	}
 
 	// Walk characters, computing each glyph's position relative to text center
-	pen_x: f32 = -total_w * 0.5  // start offset so text is centered
+	pen_x: f32 = -total_w * 0.5 // start offset so text is centered
 
 	for ch in text {
 		idx := int(ch)
@@ -191,7 +186,7 @@ draw_text_rotated :: proc(
 		em_cx := (g.bbox_min.x + g.bbox_max.x) * 0.5
 		em_cy := (g.bbox_min.y + g.bbox_max.y) * 0.5
 		local_x := pen_x + em_cx * font_size
-		local_y := -em_cy * font_size + text_h * 0.5  // center vertically, flip Y
+		local_y := -em_cy * font_size + text_h * 0.5 // center vertically, flip Y
 
 		// Rotate to screen space
 		screen_x := cx + local_x * cos_a - local_y * sin_a
@@ -211,9 +206,9 @@ draw_text_rotated :: proc(
 draw_text_on_circle :: proc(
 	ctx: ^Slug_Context,
 	text: string,
-	cx, cy: f32,       // circle center
-	radius: f32,       // circle radius
-	start_angle: f32,  // starting angle in radians
+	cx, cy: f32, // circle center
+	radius: f32, // circle radius
+	start_angle: f32, // starting angle in radians
 	font_size: f32,
 	color: [4]f32,
 ) {
@@ -243,8 +238,8 @@ draw_text_on_circle :: proc(
 		sin_t := math.sin(tangent_angle)
 
 		xform := matrix[2, 2]f32{
-			cos_t * font_size, -sin_t * font_size,
-			sin_t * font_size,  cos_t * font_size,
+			cos_t * font_size, -sin_t * font_size, 
+			sin_t * font_size, cos_t * font_size, 
 		}
 
 		if len(g.curves) > 0 && ctx.quad_count < MAX_GLYPH_QUADS {
@@ -260,11 +255,11 @@ draw_text_on_circle :: proc(
 draw_text_on_wave :: proc(
 	ctx: ^Slug_Context,
 	text: string,
-	x, y: f32,        // starting position
+	x, y: f32, // starting position
 	font_size: f32,
-	amplitude: f32,    // wave height in pixels
-	wavelength: f32,   // pixels per full cycle
-	phase: f32,        // phase offset (animated with time)
+	amplitude: f32, // wave height in pixels
+	wavelength: f32, // pixels per full cycle
+	phase: f32, // phase offset (animated with time)
 	color: [4]f32,
 ) {
 	font := slug_active_font(ctx)
@@ -287,12 +282,11 @@ draw_text_on_wave :: proc(
 		sin_t := math.sin(tangent_angle)
 
 		xform := matrix[2, 2]f32{
-			cos_t * font_size, -sin_t * font_size,
-			sin_t * font_size,  cos_t * font_size,
+			cos_t * font_size, -sin_t * font_size, 
+			sin_t * font_size, cos_t * font_size, 
 		}
 
 		em_cx := (g.bbox_min.x + g.bbox_max.x) * 0.5
-		em_cy := (g.bbox_min.y + g.bbox_max.y) * 0.5
 
 		screen_x := pen_x + em_cx * font_size * cos_t
 		screen_y := (y + wave_y) + em_cx * font_size * sin_t
@@ -308,9 +302,9 @@ draw_text_on_wave :: proc(
 // --- Scrolling combat log ---
 
 MAX_LOG_ENTRIES :: 32
-LOG_FONT_SIZE   :: f32(16.0)
+LOG_FONT_SIZE :: f32(16.0)
 LOG_LINE_HEIGHT :: f32(22.0)
-LOG_FADE_TIME   :: f32(5.0)  // seconds before entries start fading
+LOG_FADE_TIME :: f32(5.0) // seconds before entries start fading
 
 Combat_Log_Entry :: struct {
 	text:  [128]u8,
@@ -322,10 +316,10 @@ Combat_Log_Entry :: struct {
 Combat_Log :: struct {
 	entries: [MAX_LOG_ENTRIES]Combat_Log_Entry,
 	count:   int,
-	head:    int,  // ring buffer head
+	head:    int, // ring buffer head
 }
 
-combat_log_messages := [?]string{
+combat_log_messages := [?]string {
 	"You strike the goblin for %d damage!",
 	"The skeleton misses you!",
 	"You find a potion of healing.",
@@ -338,25 +332,23 @@ combat_log_messages := [?]string{
 	"You cast fireball for %d damage!",
 }
 
-combat_log_colors := [?][4]f32{
-	{1.0, 0.8, 0.8, 1.0},  // damage dealt (light red)
-	{0.7, 0.7, 0.7, 1.0},  // miss (gray)
-	{0.5, 1.0, 0.5, 1.0},  // item found (green)
-	{1.0, 1.0, 0.3, 1.0},  // crit (yellow)
-	{1.0, 0.4, 0.2, 1.0},  // dragon (orange)
-	{0.6, 0.8, 1.0, 1.0},  // dodge (light blue)
-	{1.0, 1.0, 0.6, 1.0},  // level up (bright yellow)
+combat_log_colors := [?][4]f32 {
+	{1.0, 0.8, 0.8, 1.0}, // damage dealt (light red)
+	{0.7, 0.7, 0.7, 1.0}, // miss (gray)
+	{0.5, 1.0, 0.5, 1.0}, // item found (green)
+	{1.0, 1.0, 0.3, 1.0}, // crit (yellow)
+	{1.0, 0.4, 0.2, 1.0}, // dragon (orange)
+	{0.6, 0.8, 1.0, 1.0}, // dodge (light blue)
+	{1.0, 1.0, 0.6, 1.0}, // level up (bright yellow)
 	{1.0, 0.85, 0.0, 1.0}, // gold (gold)
-	{1.0, 0.3, 0.3, 1.0},  // trap (red)
-	{0.8, 0.4, 1.0, 1.0},  // spell (purple)
+	{1.0, 0.3, 0.3, 1.0}, // trap (red)
+	{0.8, 0.4, 1.0, 1.0}, // spell (purple)
 }
 
 combat_log_add :: proc(log: ^Combat_Log, text: string, color: [4]f32) {
 	entry := &log.entries[log.head]
 	copy_len := min(len(text), len(entry.text))
-	for i in 0..<copy_len {
-		entry.text[i] = text[i]
-	}
+	copy(entry.text[:copy_len], text[:copy_len])
 	entry.len = copy_len
 	entry.color = color
 	entry.age = 0
@@ -368,7 +360,9 @@ combat_log_add :: proc(log: ^Combat_Log, text: string, color: [4]f32) {
 }
 
 combat_log_update :: proc(log: ^Combat_Log, dt: f32) {
-	for i in 0..<log.count {
+	for i in 0 ..< log.count {
+		// Ring buffer index math: head points past the newest entry, so
+		// (head - count) is the oldest. Double-mod handles negative wraparound.
 		idx := ((log.head - log.count + i) % MAX_LOG_ENTRIES + MAX_LOG_ENTRIES) % MAX_LOG_ENTRIES
 		log.entries[idx].age += dt
 	}
@@ -379,9 +373,10 @@ combat_log_draw :: proc(ctx: ^Slug_Context, log: ^Combat_Log, panel_x, panel_y, 
 	max_visible := int(panel_h / LOG_LINE_HEIGHT)
 	visible_count := min(log.count, max_visible)
 
-	for i in 0..<visible_count {
+	for i in 0 ..< visible_count {
 		// Index from newest backwards
-		entry_idx := ((log.head - visible_count + i) % MAX_LOG_ENTRIES + MAX_LOG_ENTRIES) % MAX_LOG_ENTRIES
+		entry_idx :=
+			((log.head - visible_count + i) % MAX_LOG_ENTRIES + MAX_LOG_ENTRIES) % MAX_LOG_ENTRIES
 		entry := &log.entries[entry_idx]
 
 		y := panel_y + f32(i) * LOG_LINE_HEIGHT
